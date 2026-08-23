@@ -1,0 +1,209 @@
+// totp - the six-digit codes an authenticator app shows.
+//
+//     import "totp"
+//
+//     print(must(totpNow("JBSWY3DPEHPK3PXP")))      // 123456
+//     print(must(totpVerify(secret, typed)))        // true or false
+//
+// RFC 6238, which is RFC 4226 (HOTP) with the counter set from the
+// clock. Thirty-second steps and six digits, which is what every
+// authenticator app defaults to.
+//
+// Every name is prefixed because an import lands in one flat
+// namespace: there is no `totp.` qualifier yet, so the prefix is what
+// keeps two packages from colliding.
+//
+// Pure logic on top of hash.sha1 - nothing here talks to the network,
+// and the secret never leaves the process.
+
+// ---- base32, which is how a TOTP secret is written ----
+
+pub fn totpBase32Decode(s: str) -> []int! {
+    const ALPHA = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+    let out: []int = []
+    let buffer = 0
+    let bits = 0
+
+    let i = 0
+    while i < len(s) {
+        let ch = upper(charAt(s, i))
+        i = i + 1
+        // Padding and spacing are ignored: secrets are shown to people
+        // in groups of four and typed back with the spaces left in.
+        if ch == "=" || ch == " " || ch == "-" {
+            continue
+        }
+        let v = indexOf(ALPHA, ch)
+        if v < 0 {
+            return fail("\"{ch}\" is not a base32 character")
+        }
+        buffer = (buffer << 5) | v
+        bits = bits + 5
+        if bits >= 8 {
+            bits = bits - 8
+            push(out, (buffer >> bits) & 255)
+        }
+    }
+    return out
+}
+
+// ---- HMAC-SHA1 ----
+
+fn totpSha1Bytes(data: []int) -> []int! {
+    let b = bytes.ofList(data)?
+    let hex = bytes.hash(b, "sha1")?
+    return bytes.list(bytes.fromHex(hex)?)
+}
+
+pub fn totpHmacSha1(key: []int, msg: []int) -> []int! {
+    const BLOCK = 64
+
+    // A key longer than the block is hashed down to twenty bytes first,
+    // which is what makes a long secret work rather than silently
+    // truncate.
+    let k = key
+    if len(k) > BLOCK {
+        k = totpSha1Bytes(k)?
+    }
+    while len(k) < BLOCK {
+        push(k, 0)
+    }
+
+    let inner: []int = []
+    let outer: []int = []
+    let i = 0
+    while i < BLOCK {
+        push(inner, k[i] ^ 54)
+        push(outer, k[i] ^ 92)
+        i = i + 1
+    }
+
+    i = 0
+    while i < len(msg) {
+        push(inner, msg[i])
+        i = i + 1
+    }
+
+    let innerHash = totpSha1Bytes(inner)?
+    i = 0
+    while i < len(innerHash) {
+        push(outer, innerHash[i])
+        i = i + 1
+    }
+    return totpSha1Bytes(outer)?
+}
+
+// ---- the codes ----
+
+// A counter as the eight big-endian bytes HOTP hashes.
+fn totpCounterBytes(counter: int) -> []int {
+    let out: []int = []
+    let i = 7
+    while i >= 0 {
+        push(out, (counter >> (8 * i)) & 255)
+        i = i - 1
+    }
+    return out
+}
+
+fn totpPow10(n: int) -> int {
+    let out = 1
+    let i = 0
+    while i < n {
+        out = out * 10
+        i = i + 1
+    }
+    return out
+}
+
+// Left-pad with zeros. A code of 000042 is six characters, and dropping
+// the zeros is the classic way to make one in twenty logins fail.
+fn totpPad(n: int, width: int) -> str {
+    let s = str(n)
+    while len(s) < width {
+        s = "0" + s
+    }
+    return s
+}
+
+// The HOTP counter-based code, which TOTP is a clock on top of.
+pub fn totpHotp(secret: str, counter: int, digits: int) -> str! {
+    let key = totpBase32Decode(secret)?
+    let mac = totpHmacSha1(key, totpCounterBytes(counter))?
+
+    // Dynamic truncation: the low nibble of the last byte picks where
+    // to read four bytes from, so the code depends on all twenty.
+    let offset = mac[len(mac) - 1] & 15
+    // Built up a statement at a time: a newline ends a statement in
+    // Veyl, so an expression cannot be continued by starting the next
+    // line with an operator.
+    let binary = (mac[offset] & 127) << 24
+    binary = binary | ((mac[offset + 1] & 255) << 16)
+    binary = binary | ((mac[offset + 2] & 255) << 8)
+    binary = binary | (mac[offset + 3] & 255)
+
+    return totpPad(binary % totpPow10(digits), digits)
+}
+
+// The code for a given moment.
+pub fn totpAt(secret: str, unixSeconds: int) -> str! {
+    return totpHotp(secret, unixSeconds / 30, 6)
+}
+
+// The code right now.
+pub fn totpNow(secret: str) -> str! {
+    return totpAt(secret, time.now())
+}
+
+// How many seconds this code has left before it rolls over.
+pub fn totpRemaining() -> int {
+    return 30 - (time.now() % 30)
+}
+
+// Check a code the user typed.
+//
+// One step either side is accepted, because the phone that generated it
+// and the machine checking it are never exactly in step, and a user who
+// types a code as it rolls over should not be told they are wrong.
+pub fn totpVerify(secret: str, code: str) -> bool! {
+    let typed = trim(code)
+    let slot = time.now() / 30
+    let d = -1
+    while d <= 1 {
+        if totpHotp(secret, slot + d, 6)? == typed {
+            return true
+        }
+        d = d + 1
+    }
+    return false
+}
+
+// Percent-encoding, for the label in the url below. Written here rather
+// than taken from the url library, which parses urls and does not build
+// escaped pieces of one.
+fn totpEscape(s: str) -> str {
+    const SAFE = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~"
+    const HEX = "0123456789ABCDEF"
+    let out = ""
+    let i = 0
+    while i < len(s) {
+        let ch = charAt(s, i)
+        if indexOf(SAFE, ch) >= 0 {
+            out = out + ch
+        } else {
+            let b = __strAt(s, i)
+            out = out + "%" + charAt(HEX, (b >> 4) & 15) + charAt(HEX, b & 15)
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// The otpauth:// url an authenticator app turns into a QR code.
+//
+// Not named `url`, which would shadow the url library for every file
+// that imports this one.
+pub fn totpURL(issuer: str, account: str, secret: str) -> str {
+    let label = totpEscape(issuer) + ":" + totpEscape(account)
+    return "otpauth://totp/{label}?secret={secret}&issuer={totpEscape(issuer)}"
+}
