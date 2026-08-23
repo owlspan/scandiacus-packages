@@ -9,5 +9,6 @@ ini
 jwt
 querybuilder
 sqlite
+toml
 totp
 validator

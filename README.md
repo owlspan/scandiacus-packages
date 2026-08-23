@@ -17,6 +17,7 @@ it.
 | [`jwt`](jwt/) | JSON Web Tokens, HS256, signing and verifying |
 | [`querybuilder`](querybuilder/) | Building SQL without pasting values into it |
 | [`sqlite`](sqlite/) | SQLite, and the `sqlite3.dll` that `db.*` needs |
+| [`toml`](toml/) | TOML config, flattened to dotted keys, typed reads |
 | [`totp`](totp/) | TOTP and HOTP, the six-digit codes an authenticator app shows |
 | [`validator`](validator/) | Checking data, collecting every problem |
 
