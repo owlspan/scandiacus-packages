@@ -12,9 +12,13 @@ it.
 
 | Package | What it is |
 | --- | --- |
+| [`dotenv`](dotenv/) | `.env` files, with quoting and typed reads |
 | [`ini`](ini/) | Config files: `[sections]`, `key = value`, comments |
+| [`jwt`](jwt/) | JSON Web Tokens, HS256, signing and verifying |
+| [`querybuilder`](querybuilder/) | Building SQL without pasting values into it |
 | [`sqlite`](sqlite/) | SQLite, and the `sqlite3.dll` that `db.*` needs |
 | [`totp`](totp/) | TOTP and HOTP, the six-digit codes an authenticator app shows |
+| [`validator`](validator/) | Checking data, collecting every problem |
 
 ---
 
@@ -38,6 +42,24 @@ veyl get github.com/someone/their-lib  from anyone's repository
 veyl get https://example.com/thing.vl  from a single file
 veyl list                              what is installed here
 veyl remove totp                       uninstall it
+```
+
+All of them at once:
+
+```
+veyl get officials            every package here
+veyl get officials --nodlls   the same, minus the ones carrying a
+                              native library
+```
+
+`--nodlls` matters for size. Everything here is a few kilobytes except
+`sqlite`, which is three megabytes because it carries the real library.
+
+The same works for anyone's registry. It only needs a `veyl.index`
+listing its packages, one name per line:
+
+```
+veyl get github.com/you/your-registry --all
 ```
 
 Packages install into `./veyl_modules` **next to your program**, not
