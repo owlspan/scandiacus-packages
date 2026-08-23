@@ -13,6 +13,7 @@ it.
 | Package | What it is |
 | --- | --- |
 | [`ini`](ini/) | Config files: `[sections]`, `key = value`, comments |
+| [`sqlite`](sqlite/) | SQLite, and the `sqlite3.dll` that `db.*` needs |
 | [`totp`](totp/) | TOTP and HOTP, the six-digit codes an authenticator app shows |
 
 ---

@@ -1,0 +1,3 @@
+# The native library, and a few helpers on top of the db builtins.
+sqlite.vl
+sqlite3.dll

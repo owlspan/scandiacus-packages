@@ -1,0 +1,161 @@
+// sqlite - the native library, plus a few helpers over the db builtins.
+//
+//     veyl get sqlite
+//
+//     import "sqlite"
+//
+//     let conn = must(db.open("app.db"))
+//     must(db.exec(conn, "create table if not exists notes (
+//         id integer primary key, body text)", noArgs))
+//     must(db.exec(conn, "insert into notes (body) values (?)", ["hello"]))
+//     for row in must(db.query(conn, "select id, body from notes", noArgs)) {
+//         print("{row[0]}: {row[1]}")
+//     }
+//     db.close(conn)
+//
+// The db.* functions are built into the compiler. What this package
+// carries is sqlite3.dll, which `veyl build` copies next to your
+// executable. That is why SQLite is a package rather than part of the
+// installer: a program that never opens a database never carries a
+// three megabyte library.
+//
+// Importing this package is what makes the DLL available. The compiler
+// refuses to build a program that calls db.* without it, rather than
+// producing an executable that will not start.
+//
+// Everything below is a convenience. None of it is required.
+
+// An empty argument list. Named because a bare [] in an argument
+// position has nothing to infer its element type from - the checker
+// hints a let, a return and a struct field, but not an argument to a
+// builtin whose lowering reads its own arguments.
+const dbNoArgs: []str = []
+
+// ---- reading single values ----
+
+// The first column of the first row, or the fallback when the query
+// returned nothing.
+pub fn dbScalar(conn: int, sql: str, args: []str, fallback: str) -> str! {
+    let rows = db.query(conn, sql, args)?
+    if len(rows) == 0 { return fallback }
+    if len(rows[0]) == 0 { return fallback }
+    return rows[0][0]
+}
+
+pub fn dbScalarInt(conn: int, sql: str, args: []str, fallback: int) -> int! {
+    let raw = dbScalar(conn, sql, args, "")?
+    if raw == "" { return fallback }
+    if !isInt(raw) {
+        return fail("\"{raw}\" is not a number")
+    }
+    return toInt(raw)
+}
+
+// The first row, or an empty list.
+pub fn dbRow(conn: int, sql: str, args: []str) -> []str! {
+    let rows = db.query(conn, sql, args)?
+    if len(rows) == 0 {
+        // Annotated rather than a bare [], which the checker cannot
+        // type from a return position inside a T!.
+        let none: []str = []
+        return none
+    }
+    return rows[0]
+}
+
+pub fn dbCount(conn: int, table: str) -> int! {
+    // The table name cannot be bound - sqlite binds values, not
+    // identifiers - so it is checked instead. Anything that is not a
+    // plain name is refused rather than pasted in.
+    if !dbSafeName(table) {
+        return fail("\"{table}\" is not a valid table name")
+    }
+    return dbScalarInt(conn, "select count(*) from {table}", dbNoArgs, 0)
+}
+
+// Letters, digits and underscore only, not starting with a digit.
+pub fn dbSafeName(name: str) -> bool {
+    if name == "" { return false }
+    let first = __strAt(name, 0)
+    let isLetter = (first >= 65 && first <= 90) || (first >= 97 && first <= 122)
+    if !isLetter && first != 95 { return false }
+
+    let i = 0
+    while i < len(name) {
+        let c = __strAt(name, i)
+        let ok = (c >= 65 && c <= 90) || (c >= 97 && c <= 122)
+        ok = ok || (c >= 48 && c <= 57) || c == 95
+        if !ok { return false }
+        i = i + 1
+    }
+    return true
+}
+
+// ---- schema ----
+
+pub fn dbTables(conn: int) -> []str! {
+    // One line: a newline ends a statement in Veyl, so an expression
+    // cannot be split across lines in either direction.
+    const SQL = "select name from sqlite_master where type = 'table' and name not like 'sqlite_%' order by name"
+    let rows = db.query(conn, SQL, dbNoArgs)?
+    let out: []str = []
+    for row in rows {
+        push(out, row[0])
+    }
+    return out
+}
+
+pub fn dbHasTable(conn: int, name: str) -> bool! {
+    return contains(dbTables(conn)?, name)
+}
+
+pub fn dbColumns(conn: int, table: str) -> []str! {
+    if !dbSafeName(table) {
+        return fail("\"{table}\" is not a valid table name")
+    }
+    let rows = db.query(conn, "pragma table_info({table})", dbNoArgs)?
+    let out: []str = []
+    for row in rows {
+        // pragma table_info gives cid, name, type, notnull, default, pk
+        if len(row) > 1 { push(out, row[1]) }
+    }
+    return out
+}
+
+// ---- transactions ----
+//
+// Worth using for more than correctness: sqlite commits every statement
+// on its own otherwise, and a few thousand inserts go from seconds to
+// milliseconds inside one transaction.
+
+pub fn dbBegin(conn: int) -> void! {
+    return db.exec(conn, "begin", dbNoArgs)
+}
+
+pub fn dbCommit(conn: int) -> void! {
+    return db.exec(conn, "commit", dbNoArgs)
+}
+
+pub fn dbRollback(conn: int) -> void! {
+    return db.exec(conn, "rollback", dbNoArgs)
+}
+
+// ---- rows as maps ----
+
+// A query with its columns named, for when positional indexing stops
+// being readable.
+pub fn dbQueryNamed(conn: int, table: str, sql: str, args: []str) -> []{str: str}! {
+    let cols = dbColumns(conn, table)?
+    let rows = db.query(conn, sql, args)?
+    let out: []{str: str} = []
+    for row in rows {
+        let m: {str: str} = {}
+        let i = 0
+        while i < len(row) && i < len(cols) {
+            m[cols[i]] = row[i]
+            i = i + 1
+        }
+        push(out, m)
+    }
+    return out
+}
