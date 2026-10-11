@@ -21,6 +21,7 @@ it.
 | [`toml`](toml/) | TOML config, flattened to dotted keys, typed reads |
 | [`totp`](totp/) | TOTP and HOTP, the six-digit codes an authenticator app shows |
 | [`validator`](validator/) | Checking data, collecting every problem |
+| [`vulkan`](vulkan/) | Vulkan on a `win` window: swapchain, depth, pipelines from SPIR-V, push constants |
 
 ---
 

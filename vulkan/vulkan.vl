@@ -1,0 +1,1771 @@
+// vulkan - Vulkan on a win window.
+//
+//     veyl get vulkan
+//
+//     import "vulkan"
+//
+//     let w = must(win.open("cube", 800, 600))
+//     let v = must(vkOpen(w))
+//     let pipe = must(vkPipeline(v, must(bytes.read("cube.vert.spv")),
+//         must(bytes.read("cube.frag.spv")), [3, 3], 64))
+//     let mesh = must(vkVertices(v, vertices))
+//     while win.poll(w) {
+//         if vkBegin(v, 0.1, 0.1, 0.15) {
+//             vkBind(v, pipe)
+//             vkPush(v, pipe, mvp)
+//             vkDraw(v, mesh, 36)
+//             vkEnd(v)
+//         }
+//     }
+//     vkClose(v)
+//
+// What vkOpen sets up is the part every Vulkan program writes the same
+// way: an instance, a surface on the window, a device and queue that
+// can draw and present, a swapchain with vsync, a depth buffer, a
+// render pass that clears both, and two frames in flight. The rest of
+// the API is a frame - vkBegin, draws, vkEnd - and pipelines, which are
+// made from SPIR-V.
+//
+// Shaders are SPIR-V, as Vulkan itself requires. Nothing here compiles
+// GLSL: that keeps the package small and changes nothing about speed,
+// since the driver compiles SPIR-V to the GPU's own code either way.
+// Write GLSL and compile it with glslc from the Vulkan SDK, or with any
+// other tool that writes SPIR-V, then load the .spv with bytes.read.
+// cube.vl beside this file carries its two shaders inline, so it runs
+// with nothing installed.
+//
+// Every Vulkan function used is declared pub below and called directly
+// from vulkan-1.dll, which ships with every current GPU driver. The VK
+// struct holds the raw handles, so anything this package does not wrap
+// can be done with the same calls a C program makes.
+//
+// Needs Veyl 0.66.0 or newer, for win.handle. Windows only for now.
+//
+// Not done yet: textures, descriptor sets and uniform buffers (push
+// constants carry up to 128 bytes, enough for two matrices), resizing
+// the window, and validation layers.
+
+// ---- structures, laid out as vulkan_core.h has them ----
+
+pub extern struct VkApplicationInfo {
+    sType: u32
+    pNext: ptr
+    pApplicationName: ptr
+    applicationVersion: u32
+    pEngineName: ptr
+    engineVersion: u32
+    apiVersion: u32
+}
+
+pub extern struct VkInstanceCreateInfo {
+    sType: u32
+    pNext: ptr
+    flags: u32
+    pApplicationInfo: ptr
+    enabledLayerCount: u32
+    ppEnabledLayerNames: ptr
+    enabledExtensionCount: u32
+    ppEnabledExtensionNames: ptr
+}
+
+pub extern struct VkWin32SurfaceCreateInfoKHR {
+    sType: u32
+    pNext: ptr
+    flags: u32
+    hinstance: ptr
+    hwnd: ptr
+}
+
+pub extern struct VkDeviceQueueCreateInfo {
+    sType: u32
+    pNext: ptr
+    flags: u32
+    queueFamilyIndex: u32
+    queueCount: u32
+    pQueuePriorities: ptr
+}
+
+pub extern struct VkDeviceCreateInfo {
+    sType: u32
+    pNext: ptr
+    flags: u32
+    queueCreateInfoCount: u32
+    pQueueCreateInfos: ptr
+    enabledLayerCount: u32
+    ppEnabledLayerNames: ptr
+    enabledExtensionCount: u32
+    ppEnabledExtensionNames: ptr
+    pEnabledFeatures: ptr
+}
+
+pub extern struct VkSurfaceCapabilitiesKHR {
+    minImageCount: u32
+    maxImageCount: u32
+    currentWidth: u32
+    currentHeight: u32
+    minWidth: u32
+    minHeight: u32
+    maxWidth: u32
+    maxHeight: u32
+    maxImageArrayLayers: u32
+    supportedTransforms: u32
+    currentTransform: u32
+    supportedCompositeAlpha: u32
+    supportedUsageFlags: u32
+}
+
+pub extern struct VkSwapchainCreateInfoKHR {
+    sType: u32
+    pNext: ptr
+    flags: u32
+    surface: ptr
+    minImageCount: u32
+    imageFormat: u32
+    imageColorSpace: u32
+    width: u32
+    height: u32
+    imageArrayLayers: u32
+    imageUsage: u32
+    imageSharingMode: u32
+    queueFamilyIndexCount: u32
+    pQueueFamilyIndices: ptr
+    preTransform: u32
+    compositeAlpha: u32
+    presentMode: u32
+    clipped: u32
+    oldSwapchain: ptr
+}
+
+pub extern struct VkImageViewCreateInfo {
+    sType: u32
+    pNext: ptr
+    flags: u32
+    image: ptr
+    viewType: u32
+    format: u32
+    r: u32
+    g: u32
+    b: u32
+    a: u32
+    aspectMask: u32
+    baseMipLevel: u32
+    levelCount: u32
+    baseArrayLayer: u32
+    layerCount: u32
+}
+
+pub extern struct VkImageCreateInfo {
+    sType: u32
+    pNext: ptr
+    flags: u32
+    imageType: u32
+    format: u32
+    width: u32
+    height: u32
+    depth: u32
+    mipLevels: u32
+    arrayLayers: u32
+    samples: u32
+    tiling: u32
+    usage: u32
+    sharingMode: u32
+    queueFamilyIndexCount: u32
+    pQueueFamilyIndices: ptr
+    initialLayout: u32
+}
+
+pub extern struct VkBufferCreateInfo {
+    sType: u32
+    pNext: ptr
+    flags: u32
+    size: u64
+    usage: u32
+    sharingMode: u32
+    queueFamilyIndexCount: u32
+    pQueueFamilyIndices: ptr
+}
+
+pub extern struct VkMemoryRequirements {
+    size: u64
+    alignment: u64
+    memoryTypeBits: u32
+}
+
+pub extern struct VkMemoryAllocateInfo {
+    sType: u32
+    pNext: ptr
+    allocationSize: u64
+    memoryTypeIndex: u32
+}
+
+pub extern struct VkAttachmentDescription {
+    flags: u32
+    format: u32
+    samples: u32
+    loadOp: u32
+    storeOp: u32
+    stencilLoadOp: u32
+    stencilStoreOp: u32
+    initialLayout: u32
+    finalLayout: u32
+}
+
+pub extern struct VkAttachmentReference {
+    attachment: u32
+    layout: u32
+}
+
+pub extern struct VkSubpassDescription {
+    flags: u32
+    pipelineBindPoint: u32
+    inputAttachmentCount: u32
+    pInputAttachments: ptr
+    colorAttachmentCount: u32
+    pColorAttachments: ptr
+    pResolveAttachments: ptr
+    pDepthStencilAttachment: ptr
+    preserveAttachmentCount: u32
+    pPreserveAttachments: ptr
+}
+
+pub extern struct VkSubpassDependency {
+    srcSubpass: u32
+    dstSubpass: u32
+    srcStageMask: u32
+    dstStageMask: u32
+    srcAccessMask: u32
+    dstAccessMask: u32
+    dependencyFlags: u32
+}
+
+pub extern struct VkRenderPassCreateInfo {
+    sType: u32
+    pNext: ptr
+    flags: u32
+    attachmentCount: u32
+    pAttachments: ptr
+    subpassCount: u32
+    pSubpasses: ptr
+    dependencyCount: u32
+    pDependencies: ptr
+}
+
+pub extern struct VkFramebufferCreateInfo {
+    sType: u32
+    pNext: ptr
+    flags: u32
+    renderPass: ptr
+    attachmentCount: u32
+    pAttachments: ptr
+    width: u32
+    height: u32
+    layers: u32
+}
+
+pub extern struct VkShaderModuleCreateInfo {
+    sType: u32
+    pNext: ptr
+    flags: u32
+    codeSize: u64
+    pCode: ptr
+}
+
+pub extern struct VkPipelineShaderStageCreateInfo {
+    sType: u32
+    pNext: ptr
+    flags: u32
+    stage: u32
+    module: ptr
+    pName: ptr
+    pSpecializationInfo: ptr
+}
+
+pub extern struct VkVertexInputBindingDescription {
+    binding: u32
+    stride: u32
+    inputRate: u32
+}
+
+pub extern struct VkVertexInputAttributeDescription {
+    location: u32
+    binding: u32
+    format: u32
+    offset: u32
+}
+
+pub extern struct VkPipelineVertexInputStateCreateInfo {
+    sType: u32
+    pNext: ptr
+    flags: u32
+    vertexBindingDescriptionCount: u32
+    pVertexBindingDescriptions: ptr
+    vertexAttributeDescriptionCount: u32
+    pVertexAttributeDescriptions: ptr
+}
+
+pub extern struct VkPipelineInputAssemblyStateCreateInfo {
+    sType: u32
+    pNext: ptr
+    flags: u32
+    topology: u32
+    primitiveRestartEnable: u32
+}
+
+pub extern struct VkPipelineViewportStateCreateInfo {
+    sType: u32
+    pNext: ptr
+    flags: u32
+    viewportCount: u32
+    pViewports: ptr
+    scissorCount: u32
+    pScissors: ptr
+}
+
+pub extern struct VkPipelineRasterizationStateCreateInfo {
+    sType: u32
+    pNext: ptr
+    flags: u32
+    depthClampEnable: u32
+    rasterizerDiscardEnable: u32
+    polygonMode: u32
+    cullMode: u32
+    frontFace: u32
+    depthBiasEnable: u32
+    depthBiasConstantFactor: f32
+    depthBiasClamp: f32
+    depthBiasSlopeFactor: f32
+    lineWidth: f32
+}
+
+pub extern struct VkPipelineMultisampleStateCreateInfo {
+    sType: u32
+    pNext: ptr
+    flags: u32
+    rasterizationSamples: u32
+    sampleShadingEnable: u32
+    minSampleShading: f32
+    pSampleMask: ptr
+    alphaToCoverageEnable: u32
+    alphaToOneEnable: u32
+}
+
+pub extern struct VkPipelineDepthStencilStateCreateInfo {
+    sType: u32
+    pNext: ptr
+    flags: u32
+    depthTestEnable: u32
+    depthWriteEnable: u32
+    depthCompareOp: u32
+    depthBoundsTestEnable: u32
+    stencilTestEnable: u32
+    minDepthBounds: f32 at 96
+    maxDepthBounds: f32
+}
+
+pub extern struct VkPipelineColorBlendAttachmentState {
+    blendEnable: u32
+    srcColorBlendFactor: u32
+    dstColorBlendFactor: u32
+    colorBlendOp: u32
+    srcAlphaBlendFactor: u32
+    dstAlphaBlendFactor: u32
+    alphaBlendOp: u32
+    colorWriteMask: u32
+}
+
+pub extern struct VkPipelineColorBlendStateCreateInfo {
+    sType: u32
+    pNext: ptr
+    flags: u32
+    logicOpEnable: u32
+    logicOp: u32
+    attachmentCount: u32
+    pAttachments: ptr
+    blendConstants: [4]f32
+}
+
+pub extern struct VkPipelineDynamicStateCreateInfo {
+    sType: u32
+    pNext: ptr
+    flags: u32
+    dynamicStateCount: u32
+    pDynamicStates: ptr
+}
+
+pub extern struct VkPushConstantRange {
+    stageFlags: u32
+    offset: u32
+    size: u32
+}
+
+pub extern struct VkPipelineLayoutCreateInfo {
+    sType: u32
+    pNext: ptr
+    flags: u32
+    setLayoutCount: u32
+    pSetLayouts: ptr
+    pushConstantRangeCount: u32
+    pPushConstantRanges: ptr
+}
+
+pub extern struct VkGraphicsPipelineCreateInfo {
+    sType: u32
+    pNext: ptr
+    flags: u32
+    stageCount: u32
+    pStages: ptr
+    pVertexInputState: ptr
+    pInputAssemblyState: ptr
+    pTessellationState: ptr
+    pViewportState: ptr
+    pRasterizationState: ptr
+    pMultisampleState: ptr
+    pDepthStencilState: ptr
+    pColorBlendState: ptr
+    pDynamicState: ptr
+    layout: ptr
+    renderPass: ptr
+    subpass: u32
+    basePipelineHandle: ptr
+    basePipelineIndex: i32
+}
+
+pub extern struct VkCommandPoolCreateInfo {
+    sType: u32
+    pNext: ptr
+    flags: u32
+    queueFamilyIndex: u32
+}
+
+pub extern struct VkCommandBufferAllocateInfo {
+    sType: u32
+    pNext: ptr
+    commandPool: ptr
+    level: u32
+    commandBufferCount: u32
+}
+
+pub extern struct VkCommandBufferBeginInfo {
+    sType: u32
+    pNext: ptr
+    flags: u32
+    pInheritanceInfo: ptr
+}
+
+pub extern struct VkRenderPassBeginInfo {
+    sType: u32
+    pNext: ptr
+    renderPass: ptr
+    framebuffer: ptr
+    x: i32
+    y: i32
+    width: u32
+    height: u32
+    clearValueCount: u32
+    pClearValues: ptr
+}
+
+pub extern struct VkSemaphoreCreateInfo {
+    sType: u32
+    pNext: ptr
+    flags: u32
+}
+
+pub extern struct VkFenceCreateInfo {
+    sType: u32
+    pNext: ptr
+    flags: u32
+}
+
+pub extern struct VkSubmitInfo {
+    sType: u32
+    pNext: ptr
+    waitSemaphoreCount: u32
+    pWaitSemaphores: ptr
+    pWaitDstStageMask: ptr
+    commandBufferCount: u32
+    pCommandBuffers: ptr
+    signalSemaphoreCount: u32
+    pSignalSemaphores: ptr
+}
+
+pub extern struct VkPresentInfoKHR {
+    sType: u32
+    pNext: ptr
+    waitSemaphoreCount: u32
+    pWaitSemaphores: ptr
+    swapchainCount: u32
+    pSwapchains: ptr
+    pImageIndices: ptr
+    pResults: ptr
+}
+
+pub extern struct VkViewport {
+    x: f32
+    y: f32
+    width: f32
+    height: f32
+    minDepth: f32
+    maxDepth: f32
+}
+
+pub extern struct VkRect2D {
+    x: i32
+    y: i32
+    width: u32
+    height: u32
+}
+
+pub extern struct VkImageMemoryBarrier {
+    sType: u32
+    pNext: ptr
+    srcAccessMask: u32
+    dstAccessMask: u32
+    oldLayout: u32
+    newLayout: u32
+    srcQueueFamilyIndex: u32
+    dstQueueFamilyIndex: u32
+    image: ptr
+    aspectMask: u32
+    baseMipLevel: u32
+    levelCount: u32
+    baseArrayLayer: u32
+    layerCount: u32
+}
+
+pub extern struct VkBufferImageCopy {
+    bufferOffset: u64
+    bufferRowLength: u32
+    bufferImageHeight: u32
+    aspectMask: u32
+    mipLevel: u32
+    baseArrayLayer: u32
+    layerCount: u32
+    x: i32
+    y: i32
+    z: i32
+    width: u32
+    height: u32
+    depth: u32
+}
+
+// ---- the functions, from vulkan-1.dll ----
+//
+// Handles and pointers are ptr; counts, flags and enums are int, of
+// which the driver reads the low 32 bits. Results are VkResult: 0 is
+// success, a negative number an error.
+
+pub extern fn vkCreateInstance(info: VkInstanceCreateInfo, alloc: ptr, out: ptr) -> int from "vulkan-1"
+pub extern fn vkDestroyInstance(inst: ptr, alloc: ptr) from "vulkan-1"
+pub extern fn vkEnumeratePhysicalDevices(inst: ptr, count: ptr, out: ptr) -> int from "vulkan-1"
+pub extern fn vkGetPhysicalDeviceProperties(pd: ptr, out: ptr) from "vulkan-1"
+pub extern fn vkGetPhysicalDeviceQueueFamilyProperties(pd: ptr, count: ptr, out: ptr) from "vulkan-1"
+pub extern fn vkGetPhysicalDeviceMemoryProperties(pd: ptr, out: ptr) from "vulkan-1"
+pub extern fn vkCreateWin32SurfaceKHR(inst: ptr, info: VkWin32SurfaceCreateInfoKHR, alloc: ptr,
+    out: ptr) -> int from "vulkan-1"
+pub extern fn vkDestroySurfaceKHR(inst: ptr, surface: ptr, alloc: ptr) from "vulkan-1"
+pub extern fn vkGetPhysicalDeviceSurfaceSupportKHR(pd: ptr, family: int, surface: ptr,
+    out: ptr) -> int from "vulkan-1"
+pub extern fn vkGetPhysicalDeviceSurfaceCapabilitiesKHR(pd: ptr, surface: ptr,
+    out: VkSurfaceCapabilitiesKHR) -> int from "vulkan-1"
+pub extern fn vkGetPhysicalDeviceSurfaceFormatsKHR(pd: ptr, surface: ptr, count: ptr,
+    out: ptr) -> int from "vulkan-1"
+pub extern fn vkCreateDevice(pd: ptr, info: VkDeviceCreateInfo, alloc: ptr, out: ptr) -> int from "vulkan-1"
+pub extern fn vkDestroyDevice(dev: ptr, alloc: ptr) from "vulkan-1"
+pub extern fn vkGetDeviceQueue(dev: ptr, family: int, index: int, out: ptr) from "vulkan-1"
+pub extern fn vkDeviceWaitIdle(dev: ptr) -> int from "vulkan-1"
+pub extern fn vkCreateSwapchainKHR(dev: ptr, info: VkSwapchainCreateInfoKHR, alloc: ptr,
+    out: ptr) -> int from "vulkan-1"
+pub extern fn vkDestroySwapchainKHR(dev: ptr, swapchain: ptr, alloc: ptr) from "vulkan-1"
+pub extern fn vkGetSwapchainImagesKHR(dev: ptr, swapchain: ptr, count: ptr, out: ptr) -> int from "vulkan-1"
+pub extern fn vkAcquireNextImageKHR(dev: ptr, swapchain: ptr, timeout: int, sem: ptr, fence: ptr,
+    index: ptr) -> int from "vulkan-1"
+pub extern fn vkQueuePresentKHR(queue: ptr, info: VkPresentInfoKHR) -> int from "vulkan-1"
+pub extern fn vkCreateImageView(dev: ptr, info: VkImageViewCreateInfo, alloc: ptr, out: ptr) -> int from "vulkan-1"
+pub extern fn vkDestroyImageView(dev: ptr, view: ptr, alloc: ptr) from "vulkan-1"
+pub extern fn vkCreateImage(dev: ptr, info: VkImageCreateInfo, alloc: ptr, out: ptr) -> int from "vulkan-1"
+pub extern fn vkDestroyImage(dev: ptr, image: ptr, alloc: ptr) from "vulkan-1"
+pub extern fn vkGetImageMemoryRequirements(dev: ptr, image: ptr, out: VkMemoryRequirements) from "vulkan-1"
+pub extern fn vkBindImageMemory(dev: ptr, image: ptr, memory: ptr, offset: int) -> int from "vulkan-1"
+pub extern fn vkCreateBuffer(dev: ptr, info: VkBufferCreateInfo, alloc: ptr, out: ptr) -> int from "vulkan-1"
+pub extern fn vkDestroyBuffer(dev: ptr, buffer: ptr, alloc: ptr) from "vulkan-1"
+pub extern fn vkGetBufferMemoryRequirements(dev: ptr, buffer: ptr, out: VkMemoryRequirements) from "vulkan-1"
+pub extern fn vkBindBufferMemory(dev: ptr, buffer: ptr, memory: ptr, offset: int) -> int from "vulkan-1"
+pub extern fn vkAllocateMemory(dev: ptr, info: VkMemoryAllocateInfo, alloc: ptr, out: ptr) -> int from "vulkan-1"
+pub extern fn vkFreeMemory(dev: ptr, memory: ptr, alloc: ptr) from "vulkan-1"
+pub extern fn vkMapMemory(dev: ptr, memory: ptr, offset: int, size: int, flags: int,
+    out: ptr) -> int from "vulkan-1"
+pub extern fn vkUnmapMemory(dev: ptr, memory: ptr) from "vulkan-1"
+pub extern fn vkCreateRenderPass(dev: ptr, info: VkRenderPassCreateInfo, alloc: ptr, out: ptr) -> int from "vulkan-1"
+pub extern fn vkDestroyRenderPass(dev: ptr, pass: ptr, alloc: ptr) from "vulkan-1"
+pub extern fn vkCreateFramebuffer(dev: ptr, info: VkFramebufferCreateInfo, alloc: ptr,
+    out: ptr) -> int from "vulkan-1"
+pub extern fn vkDestroyFramebuffer(dev: ptr, fb: ptr, alloc: ptr) from "vulkan-1"
+pub extern fn vkCreateShaderModule(dev: ptr, info: VkShaderModuleCreateInfo, alloc: ptr,
+    out: ptr) -> int from "vulkan-1"
+pub extern fn vkDestroyShaderModule(dev: ptr, module: ptr, alloc: ptr) from "vulkan-1"
+pub extern fn vkCreatePipelineLayout(dev: ptr, info: VkPipelineLayoutCreateInfo, alloc: ptr,
+    out: ptr) -> int from "vulkan-1"
+pub extern fn vkDestroyPipelineLayout(dev: ptr, layout: ptr, alloc: ptr) from "vulkan-1"
+pub extern fn vkCreateGraphicsPipelines(dev: ptr, cache: ptr, count: int,
+    infos: VkGraphicsPipelineCreateInfo, alloc: ptr, out: ptr) -> int from "vulkan-1"
+pub extern fn vkDestroyPipeline(dev: ptr, pipeline: ptr, alloc: ptr) from "vulkan-1"
+pub extern fn vkCreateCommandPool(dev: ptr, info: VkCommandPoolCreateInfo, alloc: ptr,
+    out: ptr) -> int from "vulkan-1"
+pub extern fn vkDestroyCommandPool(dev: ptr, pool: ptr, alloc: ptr) from "vulkan-1"
+pub extern fn vkAllocateCommandBuffers(dev: ptr, info: VkCommandBufferAllocateInfo, out: ptr) -> int from "vulkan-1"
+pub extern fn vkBeginCommandBuffer(cmd: ptr, info: VkCommandBufferBeginInfo) -> int from "vulkan-1"
+pub extern fn vkEndCommandBuffer(cmd: ptr) -> int from "vulkan-1"
+pub extern fn vkResetCommandBuffer(cmd: ptr, flags: int) -> int from "vulkan-1"
+pub extern fn vkCmdBeginRenderPass(cmd: ptr, info: VkRenderPassBeginInfo, contents: int) from "vulkan-1"
+pub extern fn vkCmdEndRenderPass(cmd: ptr) from "vulkan-1"
+pub extern fn vkCmdBindPipeline(cmd: ptr, point: int, pipeline: ptr) from "vulkan-1"
+pub extern fn vkCmdSetViewport(cmd: ptr, first: int, count: int, viewports: VkViewport) from "vulkan-1"
+pub extern fn vkCmdSetScissor(cmd: ptr, first: int, count: int, rects: VkRect2D) from "vulkan-1"
+pub extern fn vkCmdBindVertexBuffers(cmd: ptr, first: int, count: int, buffers: ptr,
+    offsets: ptr) from "vulkan-1"
+pub extern fn vkCmdPushConstants(cmd: ptr, layout: ptr, stages: int, offset: int, size: int,
+    data: ptr) from "vulkan-1"
+pub extern fn vkCmdDraw(cmd: ptr, vertices: int, instances: int, firstVertex: int,
+    firstInstance: int) from "vulkan-1"
+pub extern fn vkCmdPipelineBarrier(cmd: ptr, srcStage: int, dstStage: int, deps: int,
+    memCount: int, mem: ptr, bufCount: int, bufs: ptr, imgCount: int,
+    imgs: VkImageMemoryBarrier) from "vulkan-1"
+pub extern fn vkCmdCopyImageToBuffer(cmd: ptr, image: ptr, layout: int, buffer: ptr,
+    count: int, regions: VkBufferImageCopy) from "vulkan-1"
+pub extern fn vkCreateSemaphore(dev: ptr, info: VkSemaphoreCreateInfo, alloc: ptr, out: ptr) -> int from "vulkan-1"
+pub extern fn vkDestroySemaphore(dev: ptr, sem: ptr, alloc: ptr) from "vulkan-1"
+pub extern fn vkCreateFence(dev: ptr, info: VkFenceCreateInfo, alloc: ptr, out: ptr) -> int from "vulkan-1"
+pub extern fn vkDestroyFence(dev: ptr, fence: ptr, alloc: ptr) from "vulkan-1"
+pub extern fn vkWaitForFences(dev: ptr, count: int, fences: ptr, all: int, timeout: int) -> int from "vulkan-1"
+pub extern fn vkResetFences(dev: ptr, count: int, fences: ptr) -> int from "vulkan-1"
+pub extern fn vkQueueSubmit(queue: ptr, count: int, submits: VkSubmitInfo, fence: ptr) -> int from "vulkan-1"
+pub extern fn vkQueueWaitIdle(queue: ptr) -> int from "vulkan-1"
+
+extern fn GetModuleHandleA(name: ptr) -> ptr from "kernel32"
+
+// ---- the values used here, from vulkan_core.h ----
+
+const VK_API_VERSION_1_0 = 4194304
+const VK_FORMAT_B8G8R8A8_UNORM = 44
+const VK_FORMAT_R8G8B8A8_UNORM = 37
+const VK_FORMAT_D32_SFLOAT = 126
+const VK_COLOR_SPACE_SRGB_NONLINEAR = 0
+const VK_PRESENT_MODE_FIFO = 2
+const VK_IMAGE_LAYOUT_UNDEFINED = 0
+const VK_IMAGE_LAYOUT_COLOR_ATTACHMENT = 2
+const VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT = 3
+const VK_IMAGE_LAYOUT_TRANSFER_SRC = 6
+const VK_IMAGE_LAYOUT_PRESENT_SRC = 1000001002
+const VK_ERROR_OUT_OF_DATE = -1000001004
+const VK_TIMEOUT_FOREVER = -1
+
+// sType values
+const ST_APPLICATION_INFO = 0
+const ST_INSTANCE_CREATE_INFO = 1
+const ST_DEVICE_QUEUE_CREATE_INFO = 2
+const ST_DEVICE_CREATE_INFO = 3
+const ST_SUBMIT_INFO = 4
+const ST_MEMORY_ALLOCATE_INFO = 5
+const ST_FENCE_CREATE_INFO = 8
+const ST_SEMAPHORE_CREATE_INFO = 9
+const ST_BUFFER_CREATE_INFO = 12
+const ST_IMAGE_CREATE_INFO = 14
+const ST_IMAGE_VIEW_CREATE_INFO = 15
+const ST_SHADER_MODULE_CREATE_INFO = 16
+const ST_PIPELINE_SHADER_STAGE_CREATE_INFO = 18
+const ST_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO = 19
+const ST_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO = 20
+const ST_PIPELINE_VIEWPORT_STATE_CREATE_INFO = 22
+const ST_PIPELINE_RASTERIZATION_STATE_CREATE_INFO = 23
+const ST_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO = 24
+const ST_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO = 25
+const ST_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO = 26
+const ST_PIPELINE_DYNAMIC_STATE_CREATE_INFO = 27
+const ST_GRAPHICS_PIPELINE_CREATE_INFO = 28
+const ST_PIPELINE_LAYOUT_CREATE_INFO = 30
+const ST_FRAMEBUFFER_CREATE_INFO = 37
+const ST_RENDER_PASS_CREATE_INFO = 38
+const ST_COMMAND_POOL_CREATE_INFO = 39
+const ST_COMMAND_BUFFER_ALLOCATE_INFO = 40
+const ST_COMMAND_BUFFER_BEGIN_INFO = 42
+const ST_RENDER_PASS_BEGIN_INFO = 43
+const ST_IMAGE_MEMORY_BARRIER = 45
+const ST_SWAPCHAIN_CREATE_INFO = 1000001000
+const ST_PRESENT_INFO = 1000001001
+const ST_WIN32_SURFACE_CREATE_INFO = 1000009000
+
+// ---- the state ----
+
+const VK_FRAMES = 2
+
+// The state vkOpen builds. It lives in C memory and a VK is a view of
+// it, so every copy of v sees the same frame counter and handles;
+// vkClose frees it.
+pub extern struct VK {
+    instance: i64
+    surface: i64
+    physical: i64
+    device: i64
+    queue: i64
+    family: i64
+    swapchain: i64
+    format: i64
+    width: i64
+    height: i64
+    imageCount: i64
+    images: i64
+    views: i64
+    framebuffers: i64
+    depthImage: i64
+    depthMemory: i64
+    depthView: i64
+    renderPass: i64
+    pool: i64
+    cmds: i64
+    acquired: i64
+    rendered: i64
+    fences: i64
+    memProps: i64
+    frame: i64
+    image: i64
+    cmd: i64
+    readBuffer: i64
+    readMemory: i64
+}
+
+pub struct VKPipeline {
+    pipeline: int
+    layout: int
+    pushBytes: int
+}
+
+pub struct VKBuffer {
+    buffer: int
+    memory: int
+    size: int
+}
+
+// The word at index i of a block of 64-bit words.
+fn vkAt(block: int, i: int) -> int {
+    return mem.readI64(block + i * 8)
+}
+
+// A VkResult as a sentence for a failure.
+pub fn vkResultText(r: int) -> str {
+    if r == -1 { return "out of host memory" }
+    if r == -2 { return "out of device memory" }
+    if r == -3 { return "initialization failed" }
+    if r == -4 { return "device lost" }
+    if r == -6 { return "a layer is missing" }
+    if r == -7 { return "an extension is missing" }
+    if r == -8 { return "a feature is missing" }
+    if r == -9 { return "the driver is incompatible" }
+    if r == -1000000000 { return "the surface is lost" }
+    if r == -1000001004 { return "the swapchain is out of date" }
+    if r == -1000012000 { return "invalid shader" }
+    return "VkResult {r}"
+}
+
+fn vkCheck(what: str, r: int) -> void! {
+    if r < 0 {
+        return fail("vulkan: {what} failed: {vkResultText(r)}")
+    }
+}
+
+// The first memory type allowed by `bits` with every flag in `want`.
+fn vkMemoryType(v: VK, bits: int, want: int) -> int {
+    let n = mem.readU32(v.memProps)
+    for i in 0..n {
+        let flags = mem.readU32(v.memProps + 4 + i * 8)
+        if (bits & (1 << i)) != 0 && (flags & want) == want {
+            return i
+        }
+    }
+    return -1
+}
+
+fn vkAllocateFor(v: VK, req: VkMemoryRequirements, want: int) -> int! {
+    let kind = vkMemoryType(v, int(req.memoryTypeBits), want)
+    if kind < 0 {
+        return fail("vulkan: no memory of the kind needed")
+    }
+    let info = VkMemoryAllocateInfo{}
+    info.sType = u32(ST_MEMORY_ALLOCATE_INFO)
+    info.allocationSize = req.size
+    info.memoryTypeIndex = u32(kind)
+    let memory = 0
+    vkCheck("vkAllocateMemory", vkAllocateMemory(v.device, info, 0, &memory))?
+    return memory
+}
+
+// ---- opening ----
+
+// Everything up to the first frame. Fails with the step that failed
+// rather than handing back a VK the first draw would crash on.
+pub fn vkOpen(w: int) -> VK! {
+    if os.name() != "windows" {
+        return fail("vulkan: only Windows is supported so far")
+    }
+    let v = VK(mem.alloc(VK.size))
+
+    // Instance, with the two extensions a window needs.
+    let appName = "veyl"
+    let app = VkApplicationInfo{}
+    app.sType = u32(ST_APPLICATION_INFO)
+    app.pApplicationName = mem.addr(appName)
+    app.pEngineName = mem.addr(appName)
+    app.apiVersion = u32(VK_API_VERSION_1_0)
+    let extSurface = "VK_KHR_surface"
+    let extWin32 = "VK_KHR_win32_surface"
+    let exts = mem.alloc(16)
+    mem.write64(exts, mem.addr(extSurface))
+    mem.write64(exts + 8, mem.addr(extWin32))
+    let ii = VkInstanceCreateInfo{}
+    ii.sType = u32(ST_INSTANCE_CREATE_INFO)
+    ii.pApplicationInfo = mem.addr(app)
+    ii.enabledExtensionCount = 2
+    ii.ppEnabledExtensionNames = exts
+    let inst = 0
+    let r = vkCreateInstance(ii, 0, &inst)
+    mem.free(exts)
+    if r < 0 {
+        mem.free(mem.addr(v))
+        return fail("vulkan: vkCreateInstance failed: {vkResultText(r)}")
+    }
+    v.instance = inst
+
+    // The surface on the win window.
+    let si = VkWin32SurfaceCreateInfoKHR{}
+    si.sType = u32(ST_WIN32_SURFACE_CREATE_INFO)
+    si.hinstance = GetModuleHandleA(0)
+    si.hwnd = win.handle(w)
+    let surface = 0
+    let rs = vkCreateWin32SurfaceKHR(v.instance, si, 0, &surface)
+    if rs < 0 {
+        vkDestroyInstance(v.instance, 0)
+        mem.free(mem.addr(v))
+        return fail("vulkan: vkCreateWin32SurfaceKHR failed: {vkResultText(rs)}")
+    }
+    v.surface = surface
+
+    let picked = vkPickDevice(v)
+    if !isOk(picked) {
+        vkDestroySurfaceKHR(v.instance, v.surface, 0)
+        vkDestroyInstance(v.instance, 0)
+        mem.free(mem.addr(v))
+        return fail(errorOf(picked))
+    }
+    v.memProps = mem.alloc(520)
+    vkGetPhysicalDeviceMemoryProperties(v.physical, v.memProps)
+
+    // Device and its queue, with the swapchain extension.
+    let prio = mem.alloc(8)
+    mem.writeF32(prio, 1.0)
+    let qi = VkDeviceQueueCreateInfo{}
+    qi.sType = u32(ST_DEVICE_QUEUE_CREATE_INFO)
+    qi.queueFamilyIndex = u32(v.family)
+    qi.queueCount = 1
+    qi.pQueuePriorities = prio
+    let extSwap = "VK_KHR_swapchain"
+    let dexts = mem.alloc(8)
+    mem.write64(dexts, mem.addr(extSwap))
+    let di = VkDeviceCreateInfo{}
+    di.sType = u32(ST_DEVICE_CREATE_INFO)
+    di.queueCreateInfoCount = 1
+    di.pQueueCreateInfos = mem.addr(qi)
+    di.enabledExtensionCount = 1
+    di.ppEnabledExtensionNames = dexts
+    let dev = 0
+    let rd = vkCreateDevice(v.physical, di, 0, &dev)
+    mem.free(prio)
+    mem.free(dexts)
+    if rd < 0 {
+        vkDestroySurfaceKHR(v.instance, v.surface, 0)
+        vkDestroyInstance(v.instance, 0)
+        mem.free(mem.addr(v))
+        return fail("vulkan: vkCreateDevice failed: {vkResultText(rd)}")
+    }
+    v.device = dev
+    let q = 0
+    vkGetDeviceQueue(v.device, v.family, 0, &q)
+    v.queue = q
+
+    let built = vkBuildFrames(v, win.width(w), win.height(w))
+    if !isOk(built) {
+        vkClose(v)
+        return fail(errorOf(built))
+    }
+    return v
+}
+
+// A GPU with a queue family that can both draw and present to the
+// surface. A discrete GPU wins over an integrated one when there are
+// both.
+fn vkPickDevice(v: VK) -> void! {
+    let count: u32 = 0
+    vkCheck("vkEnumeratePhysicalDevices", vkEnumeratePhysicalDevices(v.instance, &count, 0))?
+    if count == 0 {
+        return fail("vulkan: no GPU with a Vulkan driver")
+    }
+    let n = int(count)
+    let list = mem.alloc(n * 8)
+    vkEnumeratePhysicalDevices(v.instance, &count, list)
+    let props = mem.alloc(1024)
+    let best = -1
+    let bestFamily = -1
+    let bestScore = -1
+    for i in 0..n {
+        let pd = vkAt(list, i)
+        let family = vkPresentFamily(v, pd)
+        if family < 0 {
+            continue
+        }
+        vkGetPhysicalDeviceProperties(pd, props)
+        // VkPhysicalDeviceType: 2 discrete, 1 integrated.
+        let kind = mem.readU32(props + 16)
+        let score = 1
+        if kind == 2 { score = 3 }
+        if kind == 1 { score = 2 }
+        if score > bestScore {
+            best = pd
+            bestFamily = family
+            bestScore = score
+        }
+    }
+    mem.free(props)
+    mem.free(list)
+    if best == -1 {
+        return fail("vulkan: no GPU can draw to this window")
+    }
+    v.physical = best
+    v.family = bestFamily
+}
+
+fn vkPresentFamily(v: VK, pd: int) -> int {
+    let count: u32 = 0
+    vkGetPhysicalDeviceQueueFamilyProperties(pd, &count, 0)
+    let n = int(count)
+    let fams = mem.alloc(n * 24 + 24)
+    vkGetPhysicalDeviceQueueFamilyProperties(pd, &count, fams)
+    let found = -1
+    for i in 0..n {
+        let flags = mem.readU32(fams + i * 24)
+        let ok: u32 = 0
+        vkGetPhysicalDeviceSurfaceSupportKHR(pd, i, v.surface, &ok)
+        // VK_QUEUE_GRAPHICS_BIT is 1.
+        if (flags & 1) != 0 && ok != 0 {
+            found = i
+            break
+        }
+    }
+    mem.free(fams)
+    return found
+}
+
+// The swapchain and everything sized by it: views, the depth buffer,
+// the render pass, framebuffers, command buffers and the per-frame
+// semaphores and fences.
+fn vkBuildFrames(v: VK, width: int, height: int) -> void! {
+    let caps = VkSurfaceCapabilitiesKHR{}
+    vkCheck("reading the surface", vkGetPhysicalDeviceSurfaceCapabilitiesKHR(v.physical, v.surface, caps))?
+
+    // B8G8R8A8 when offered, which every Windows driver does; else the
+    // first format the surface lists.
+    let fcount: u32 = 0
+    vkGetPhysicalDeviceSurfaceFormatsKHR(v.physical, v.surface, &fcount, 0)
+    let formats = mem.alloc(int(fcount) * 8 + 8)
+    vkGetPhysicalDeviceSurfaceFormatsKHR(v.physical, v.surface, &fcount, formats)
+    let format = mem.readU32(formats)
+    let space = mem.readU32(formats + 4)
+    for i in 0..int(fcount) {
+        if mem.readU32(formats + i * 8) == VK_FORMAT_B8G8R8A8_UNORM {
+            format = VK_FORMAT_B8G8R8A8_UNORM
+            space = mem.readU32(formats + i * 8 + 4)
+        }
+    }
+    mem.free(formats)
+    v.format = format
+
+    // 0xFFFFFFFF means the surface takes whatever size is asked for.
+    v.width = width
+    v.height = height
+    if int(caps.currentWidth) != 0xFFFFFFFF {
+        v.width = int(caps.currentWidth)
+        v.height = int(caps.currentHeight)
+    }
+
+    let images = int(caps.minImageCount) + 1
+    if int(caps.maxImageCount) > 0 && images > int(caps.maxImageCount) {
+        images = int(caps.maxImageCount)
+    }
+
+    let sc = VkSwapchainCreateInfoKHR{}
+    sc.sType = u32(ST_SWAPCHAIN_CREATE_INFO)
+    sc.surface = v.surface
+    sc.minImageCount = u32(images)
+    sc.imageFormat = u32(format)
+    sc.imageColorSpace = u32(space)
+    sc.width = u32(v.width)
+    sc.height = u32(v.height)
+    sc.imageArrayLayers = 1
+    // COLOR_ATTACHMENT, plus TRANSFER_SRC for vkEndRead when allowed.
+    let usage = 0x10
+    if (int(caps.supportedUsageFlags) & 0x1) != 0 {
+        usage = usage | 0x1
+    }
+    sc.imageUsage = u32(usage)
+    sc.preTransform = caps.currentTransform
+    // OPAQUE when allowed, else the first mode the surface has.
+    let alpha = 1
+    while (int(caps.supportedCompositeAlpha) & alpha) == 0 && alpha < 16 {
+        alpha = alpha * 2
+    }
+    sc.compositeAlpha = u32(alpha)
+    sc.presentMode = u32(VK_PRESENT_MODE_FIFO)
+    sc.clipped = 1
+    let swapchain = 0
+    vkCheck("vkCreateSwapchainKHR", vkCreateSwapchainKHR(v.device, sc, 0, &swapchain))?
+    v.swapchain = swapchain
+
+    let icount: u32 = 0
+    vkGetSwapchainImagesKHR(v.device, v.swapchain, &icount, 0)
+    v.imageCount = int(icount)
+    v.images = mem.alloc(v.imageCount * 8)
+    vkGetSwapchainImagesKHR(v.device, v.swapchain, &icount, v.images)
+
+    v.views = mem.alloc(v.imageCount * 8)
+    for i in 0..v.imageCount {
+        let view = vkView(v, vkAt(v.images, i), v.format, 1)?
+        mem.write64(v.views + i * 8, view)
+    }
+
+    vkBuildDepth(v)?
+    vkBuildRenderPass(v)?
+
+    v.framebuffers = mem.alloc(v.imageCount * 8)
+    let attach = mem.alloc(16)
+    for i in 0..v.imageCount {
+        mem.write64(attach, vkAt(v.views, i))
+        mem.write64(attach + 8, v.depthView)
+        let fi = VkFramebufferCreateInfo{}
+        fi.sType = u32(ST_FRAMEBUFFER_CREATE_INFO)
+        fi.renderPass = v.renderPass
+        fi.attachmentCount = 2
+        fi.pAttachments = attach
+        fi.width = u32(v.width)
+        fi.height = u32(v.height)
+        fi.layers = 1
+        let fb = 0
+        vkCheck("vkCreateFramebuffer", vkCreateFramebuffer(v.device, fi, 0, &fb))?
+        mem.write64(v.framebuffers + i * 8, fb)
+    }
+    mem.free(attach)
+
+    // One command buffer, one acquire semaphore and one fence per frame
+    // in flight; one render-done semaphore per swapchain image, since
+    // presenting holds it until that image comes round again.
+    let pi = VkCommandPoolCreateInfo{}
+    pi.sType = u32(ST_COMMAND_POOL_CREATE_INFO)
+    pi.flags = 2 // RESET_COMMAND_BUFFER
+    pi.queueFamilyIndex = u32(v.family)
+    let pool = 0
+    vkCheck("vkCreateCommandPool", vkCreateCommandPool(v.device, pi, 0, &pool))?
+    v.pool = pool
+    let ai = VkCommandBufferAllocateInfo{}
+    ai.sType = u32(ST_COMMAND_BUFFER_ALLOCATE_INFO)
+    ai.commandPool = v.pool
+    ai.commandBufferCount = u32(VK_FRAMES + 1)
+    v.cmds = mem.alloc((VK_FRAMES + 1) * 8)
+    vkCheck("vkAllocateCommandBuffers", vkAllocateCommandBuffers(v.device, ai, v.cmds))?
+
+    let semInfo = VkSemaphoreCreateInfo{}
+    semInfo.sType = u32(ST_SEMAPHORE_CREATE_INFO)
+    let fenceInfo = VkFenceCreateInfo{}
+    fenceInfo.sType = u32(ST_FENCE_CREATE_INFO)
+    fenceInfo.flags = 1 // start signaled, so the first wait returns
+    v.acquired = mem.alloc(VK_FRAMES * 8)
+    v.fences = mem.alloc(VK_FRAMES * 8)
+    for i in 0..VK_FRAMES {
+        let s = 0
+        vkCheck("vkCreateSemaphore", vkCreateSemaphore(v.device, semInfo, 0, &s))?
+        mem.write64(v.acquired + i * 8, s)
+        let f = 0
+        vkCheck("vkCreateFence", vkCreateFence(v.device, fenceInfo, 0, &f))?
+        mem.write64(v.fences + i * 8, f)
+    }
+    v.rendered = mem.alloc(v.imageCount * 8)
+    for i in 0..v.imageCount {
+        let s = 0
+        vkCheck("vkCreateSemaphore", vkCreateSemaphore(v.device, semInfo, 0, &s))?
+        mem.write64(v.rendered + i * 8, s)
+    }
+}
+
+// aspect 1 is color, 2 depth.
+fn vkView(v: VK, image: int, format: int, aspect: int) -> int! {
+    let vi = VkImageViewCreateInfo{}
+    vi.sType = u32(ST_IMAGE_VIEW_CREATE_INFO)
+    vi.image = image
+    vi.viewType = 1 // 2D
+    vi.format = u32(format)
+    vi.aspectMask = u32(aspect)
+    vi.levelCount = 1
+    vi.layerCount = 1
+    let view = 0
+    vkCheck("vkCreateImageView", vkCreateImageView(v.device, vi, 0, &view))?
+    return view
+}
+
+fn vkBuildDepth(v: VK) -> void! {
+    let ii = VkImageCreateInfo{}
+    ii.sType = u32(ST_IMAGE_CREATE_INFO)
+    ii.imageType = 1 // 2D
+    ii.format = u32(VK_FORMAT_D32_SFLOAT)
+    ii.width = u32(v.width)
+    ii.height = u32(v.height)
+    ii.depth = 1
+    ii.mipLevels = 1
+    ii.arrayLayers = 1
+    ii.samples = 1
+    ii.tiling = 0 // OPTIMAL
+    ii.usage = 0x20 // DEPTH_STENCIL_ATTACHMENT
+    let image = 0
+    vkCheck("creating the depth buffer", vkCreateImage(v.device, ii, 0, &image))?
+    v.depthImage = image
+    let req = VkMemoryRequirements{}
+    vkGetImageMemoryRequirements(v.device, v.depthImage, req)
+    v.depthMemory = vkAllocateFor(v, req, 1)? // DEVICE_LOCAL
+    vkCheck("vkBindImageMemory", vkBindImageMemory(v.device, v.depthImage, v.depthMemory, 0))?
+    v.depthView = vkView(v, v.depthImage, VK_FORMAT_D32_SFLOAT, 2)?
+}
+
+fn vkBuildRenderPass(v: VK) -> void! {
+    let atts = mem.alloc(VkAttachmentDescription.size * 2)
+    let color = VkAttachmentDescription(atts)
+    color.format = u32(v.format)
+    color.samples = 1
+    color.loadOp = 1 // CLEAR
+    color.storeOp = 0 // STORE
+    color.stencilLoadOp = 2 // DONT_CARE
+    color.stencilStoreOp = 1 // DONT_CARE
+    color.initialLayout = u32(VK_IMAGE_LAYOUT_UNDEFINED)
+    color.finalLayout = u32(VK_IMAGE_LAYOUT_PRESENT_SRC)
+    let depth = VkAttachmentDescription(atts + VkAttachmentDescription.size)
+    depth.format = u32(VK_FORMAT_D32_SFLOAT)
+    depth.samples = 1
+    depth.loadOp = 1
+    depth.storeOp = 1
+    depth.stencilLoadOp = 2
+    depth.stencilStoreOp = 1
+    depth.initialLayout = u32(VK_IMAGE_LAYOUT_UNDEFINED)
+    depth.finalLayout = u32(VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT)
+
+    let colorRef = VkAttachmentReference{}
+    colorRef.attachment = 0
+    colorRef.layout = u32(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT)
+    let depthRef = VkAttachmentReference{}
+    depthRef.attachment = 1
+    depthRef.layout = u32(VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT)
+    let sub = VkSubpassDescription{}
+    sub.pipelineBindPoint = 0 // GRAPHICS
+    sub.colorAttachmentCount = 1
+    sub.pColorAttachments = mem.addr(colorRef)
+    sub.pDepthStencilAttachment = mem.addr(depthRef)
+
+    // The subpass waits for the acquire semaphore's stage, and for the
+    // previous frame's depth writes, before it writes either.
+    let dep = VkSubpassDependency{}
+    dep.srcSubpass = 0xFFFFFFFF // EXTERNAL
+    dep.dstSubpass = 0
+    dep.srcStageMask = 0x400 | 0x200 // COLOR_ATTACHMENT_OUTPUT | LATE_FRAGMENT_TESTS
+    dep.dstStageMask = 0x400 | 0x100 // COLOR_ATTACHMENT_OUTPUT | EARLY_FRAGMENT_TESTS
+    dep.srcAccessMask = 0x400 // DEPTH_STENCIL_ATTACHMENT_WRITE
+    dep.dstAccessMask = 0x100 | 0x400 // COLOR_ATTACHMENT_WRITE | DEPTH_STENCIL_ATTACHMENT_WRITE
+
+    let ri = VkRenderPassCreateInfo{}
+    ri.sType = u32(ST_RENDER_PASS_CREATE_INFO)
+    ri.attachmentCount = 2
+    ri.pAttachments = atts
+    ri.subpassCount = 1
+    ri.pSubpasses = mem.addr(sub)
+    ri.dependencyCount = 1
+    ri.pDependencies = mem.addr(dep)
+    let pass = 0
+    let r = vkCreateRenderPass(v.device, ri, 0, &pass)
+    mem.free(atts)
+    vkCheck("vkCreateRenderPass", r)?
+    v.renderPass = pass
+}
+
+// Waits for the GPU and frees everything vkOpen made, v included.
+pub fn vkClose(v: VK) {
+    if v.device != 0 {
+        vkDeviceWaitIdle(v.device)
+        if v.readBuffer != 0 {
+            vkDestroyBuffer(v.device, v.readBuffer, 0)
+            vkFreeMemory(v.device, v.readMemory, 0)
+        }
+        for i in 0..VK_FRAMES {
+            if v.acquired != 0 { vkDestroySemaphore(v.device, vkAt(v.acquired, i), 0) }
+            if v.fences != 0 { vkDestroyFence(v.device, vkAt(v.fences, i), 0) }
+        }
+        for i in 0..v.imageCount {
+            if v.rendered != 0 { vkDestroySemaphore(v.device, vkAt(v.rendered, i), 0) }
+            if v.framebuffers != 0 { vkDestroyFramebuffer(v.device, vkAt(v.framebuffers, i), 0) }
+            if v.views != 0 { vkDestroyImageView(v.device, vkAt(v.views, i), 0) }
+        }
+        if v.pool != 0 { vkDestroyCommandPool(v.device, v.pool, 0) }
+        if v.renderPass != 0 { vkDestroyRenderPass(v.device, v.renderPass, 0) }
+        if v.depthView != 0 { vkDestroyImageView(v.device, v.depthView, 0) }
+        if v.depthImage != 0 { vkDestroyImage(v.device, v.depthImage, 0) }
+        if v.depthMemory != 0 { vkFreeMemory(v.device, v.depthMemory, 0) }
+        if v.swapchain != 0 { vkDestroySwapchainKHR(v.device, v.swapchain, 0) }
+        vkDestroyDevice(v.device, 0)
+    }
+    if v.surface != 0 { vkDestroySurfaceKHR(v.instance, v.surface, 0) }
+    if v.instance != 0 { vkDestroyInstance(v.instance, 0) }
+    mem.free(v.images)
+    mem.free(v.views)
+    mem.free(v.framebuffers)
+    mem.free(v.cmds)
+    mem.free(v.acquired)
+    mem.free(v.rendered)
+    mem.free(v.fences)
+    mem.free(v.memProps)
+    mem.free(mem.addr(v))
+}
+
+// ---- pipelines ----
+
+pub fn vkShaderModule(v: VK, spirv: bytes) -> int! {
+    if len(spirv) < 20 || len(spirv) % 4 != 0 {
+        return fail("vulkan: that is not SPIR-V - it should be a whole number of 4-byte words")
+    }
+    if valueOr(bytes.getInt(spirv, 0, 4), 0) != 0x07230203 {
+        return fail("vulkan: that is not SPIR-V - it does not start with the magic number")
+    }
+    let si = VkShaderModuleCreateInfo{}
+    si.sType = u32(ST_SHADER_MODULE_CREATE_INFO)
+    si.codeSize = u64(len(spirv))
+    si.pCode = mem.addr(spirv)
+    let m = 0
+    vkCheck("vkCreateShaderModule", vkCreateShaderModule(v.device, si, 0, &m))?
+    return m
+}
+
+// SPIR-V written as hex, the way cube.vl carries its shaders; spaces
+// and line breaks are ignored.
+pub fn vkSpirvHex(text: str) -> bytes! {
+    let s = replace(replace(replace(text, "\n", ""), "\r", ""), " ", "")
+    return bytes.fromHex(s)
+}
+
+// A graphics pipeline from a vertex and a fragment shader. `attrs` is
+// the float count of each vertex attribute in order - [3, 3] is
+// location 0 a vec3 and location 1 a vec3, 24 bytes a vertex.
+// `pushBytes` is how much vkPush may send to the vertex shader, up to
+// 128. Triangles, depth tested, no culling, no blending.
+pub fn vkPipeline(v: VK, vertexSpirv: bytes, fragmentSpirv: bytes, attrs: []int,
+    pushBytes: int) -> VKPipeline! {
+    if pushBytes > 128 {
+        return fail("vulkan: push constants are limited to 128 bytes")
+    }
+    let vs = vkShaderModule(v, vertexSpirv)?
+    let fsr = vkShaderModule(v, fragmentSpirv)
+    if !isOk(fsr) {
+        vkDestroyShaderModule(v.device, vs, 0)
+    }
+    let fs = fsr?
+
+    let entry = "main"
+    let stages = mem.alloc(VkPipelineShaderStageCreateInfo.size * 2)
+    let s0 = VkPipelineShaderStageCreateInfo(stages)
+    s0.sType = u32(ST_PIPELINE_SHADER_STAGE_CREATE_INFO)
+    s0.stage = 1 // VERTEX
+    s0.module = vs
+    s0.pName = mem.addr(entry)
+    let s1 = VkPipelineShaderStageCreateInfo(stages + VkPipelineShaderStageCreateInfo.size)
+    s1.sType = u32(ST_PIPELINE_SHADER_STAGE_CREATE_INFO)
+    s1.stage = 0x10 // FRAGMENT
+    s1.module = fs
+    s1.pName = mem.addr(entry)
+
+    let n = len(attrs)
+    let stride = 0
+    let descs = mem.alloc(VkVertexInputAttributeDescription.size * (n + 1))
+    for i in 0..n {
+        let d = VkVertexInputAttributeDescription(descs + i * VkVertexInputAttributeDescription.size)
+        d.location = u32(i)
+        d.binding = 0
+        // R32_SFLOAT 100, R32G32 103, R32G32B32 106, R32G32B32A32 109
+        d.format = u32(97 + 3 * attrs[i])
+        d.offset = u32(stride)
+        stride = stride + attrs[i] * 4
+    }
+    let binding = VkVertexInputBindingDescription{}
+    binding.stride = u32(stride)
+    let vin = VkPipelineVertexInputStateCreateInfo{}
+    vin.sType = u32(ST_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO)
+    if n > 0 {
+        vin.vertexBindingDescriptionCount = 1
+        vin.pVertexBindingDescriptions = mem.addr(binding)
+        vin.vertexAttributeDescriptionCount = u32(n)
+        vin.pVertexAttributeDescriptions = descs
+    }
+
+    let ia = VkPipelineInputAssemblyStateCreateInfo{}
+    ia.sType = u32(ST_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO)
+    ia.topology = 3 // TRIANGLE_LIST
+    let vp = VkPipelineViewportStateCreateInfo{}
+    vp.sType = u32(ST_PIPELINE_VIEWPORT_STATE_CREATE_INFO)
+    vp.viewportCount = 1
+    vp.scissorCount = 1
+    let rs = VkPipelineRasterizationStateCreateInfo{}
+    rs.sType = u32(ST_PIPELINE_RASTERIZATION_STATE_CREATE_INFO)
+    rs.polygonMode = 0 // FILL
+    rs.cullMode = 0 // NONE
+    rs.frontFace = 0 // COUNTER_CLOCKWISE
+    rs.lineWidth = 1.0
+    let ms = VkPipelineMultisampleStateCreateInfo{}
+    ms.sType = u32(ST_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO)
+    ms.rasterizationSamples = 1
+    let ds = VkPipelineDepthStencilStateCreateInfo{}
+    ds.sType = u32(ST_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO)
+    ds.depthTestEnable = 1
+    ds.depthWriteEnable = 1
+    ds.depthCompareOp = 1 // LESS
+    ds.maxDepthBounds = 1.0
+    let blend = VkPipelineColorBlendAttachmentState{}
+    blend.colorWriteMask = 0xF
+    let cb = VkPipelineColorBlendStateCreateInfo{}
+    cb.sType = u32(ST_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO)
+    cb.attachmentCount = 1
+    cb.pAttachments = mem.addr(blend)
+    let dyn = mem.alloc(8)
+    mem.write32(dyn, 0) // VIEWPORT
+    mem.write32(dyn + 4, 1) // SCISSOR
+    let dy = VkPipelineDynamicStateCreateInfo{}
+    dy.sType = u32(ST_PIPELINE_DYNAMIC_STATE_CREATE_INFO)
+    dy.dynamicStateCount = 2
+    dy.pDynamicStates = dyn
+
+    let push = VkPushConstantRange{}
+    push.stageFlags = 1 | 0x10 // VERTEX | FRAGMENT
+    push.size = u32(pushBytes)
+    let li = VkPipelineLayoutCreateInfo{}
+    li.sType = u32(ST_PIPELINE_LAYOUT_CREATE_INFO)
+    if pushBytes > 0 {
+        li.pushConstantRangeCount = 1
+        li.pPushConstantRanges = mem.addr(push)
+    }
+    let layout = 0
+    let rl = vkCreatePipelineLayout(v.device, li, 0, &layout)
+
+    let pipeline = 0
+    let rp = rl
+    if rl >= 0 {
+        let gi = VkGraphicsPipelineCreateInfo{}
+        gi.sType = u32(ST_GRAPHICS_PIPELINE_CREATE_INFO)
+        gi.stageCount = 2
+        gi.pStages = stages
+        gi.pVertexInputState = mem.addr(vin)
+        gi.pInputAssemblyState = mem.addr(ia)
+        gi.pViewportState = mem.addr(vp)
+        gi.pRasterizationState = mem.addr(rs)
+        gi.pMultisampleState = mem.addr(ms)
+        gi.pDepthStencilState = mem.addr(ds)
+        gi.pColorBlendState = mem.addr(cb)
+        gi.pDynamicState = mem.addr(dy)
+        gi.layout = layout
+        gi.renderPass = v.renderPass
+        gi.basePipelineIndex = -1
+        rp = vkCreateGraphicsPipelines(v.device, 0, 1, gi, 0, &pipeline)
+    }
+
+    // The modules are compiled into the pipeline and can go now.
+    vkDestroyShaderModule(v.device, vs, 0)
+    vkDestroyShaderModule(v.device, fs, 0)
+    mem.free(stages)
+    mem.free(descs)
+    mem.free(dyn)
+    if rl < 0 {
+        return fail("vulkan: vkCreatePipelineLayout failed: {vkResultText(rl)}")
+    }
+    if rp < 0 {
+        vkDestroyPipelineLayout(v.device, layout, 0)
+        return fail("vulkan: vkCreateGraphicsPipelines failed: {vkResultText(rp)}")
+    }
+    return VKPipeline{pipeline: pipeline, layout: layout, pushBytes: pushBytes}
+}
+
+pub fn vkFreePipeline(v: VK, p: VKPipeline) {
+    vkDeviceWaitIdle(v.device)
+    vkDestroyPipeline(v.device, p.pipeline, 0)
+    vkDestroyPipelineLayout(v.device, p.layout, 0)
+}
+
+// ---- buffers ----
+
+fn vkMakeBuffer(v: VK, size: int, usage: int) -> VKBuffer! {
+    let bi = VkBufferCreateInfo{}
+    bi.sType = u32(ST_BUFFER_CREATE_INFO)
+    bi.size = u64(size)
+    bi.usage = u32(usage)
+    let buffer = 0
+    vkCheck("vkCreateBuffer", vkCreateBuffer(v.device, bi, 0, &buffer))?
+    let req = VkMemoryRequirements{}
+    vkGetBufferMemoryRequirements(v.device, buffer, req)
+    // HOST_VISIBLE | HOST_COHERENT: written by the CPU, no flushes.
+    let mr = vkAllocateFor(v, req, 2 | 4)
+    if !isOk(mr) {
+        vkDestroyBuffer(v.device, buffer, 0)
+    }
+    let memory = mr?
+    vkBindBufferMemory(v.device, buffer, memory, 0)
+    return VKBuffer{buffer: buffer, memory: memory, size: size}
+}
+
+// A vertex buffer holding xs as 32-bit floats, in memory the CPU can
+// write and the GPU reads directly. Fine for meshes up to a few
+// megabytes; past that a staging copy to device memory is faster.
+pub fn vkVertices(v: VK, xs: []float) -> VKBuffer! {
+    let n = len(xs)
+    let b = vkMakeBuffer(v, n * 4 + 4, 0x80)? // VERTEX_BUFFER
+    vkWriteFloats(v, b, xs)
+    return b
+}
+
+// Replaces a buffer's contents from the start. Wait for the frames that
+// use it first (vkWait) when it is being drawn from.
+pub fn vkWriteFloats(v: VK, b: VKBuffer, xs: []float) {
+    let p = 0
+    vkMapMemory(v.device, b.memory, 0, b.size, 0, &p)
+    let f = p as *f32
+    let n = len(xs)
+    if n * 4 > b.size { n = b.size / 4 }
+    for i in 0..n {
+        f[i] = f32(xs[i])
+    }
+    vkUnmapMemory(v.device, b.memory)
+}
+
+pub fn vkFreeBuffer(v: VK, b: VKBuffer) {
+    vkDeviceWaitIdle(v.device)
+    vkDestroyBuffer(v.device, b.buffer, 0)
+    vkFreeMemory(v.device, b.memory, 0)
+}
+
+// Waits until the GPU has finished everything submitted so far.
+pub fn vkWait(v: VK) {
+    vkDeviceWaitIdle(v.device)
+}
+
+// ---- a frame ----
+
+// Starts a frame cleared to (r, g, b), depth to 1. Returns false when
+// there is nothing to draw into this time - the window is minimised or
+// the swapchain went out of date - and then vkEnd must not be called.
+pub fn vkBegin(v: VK, r: float, g: float, b: float) -> bool {
+    let fence = v.fences + v.frame * 8
+    vkWaitForFences(v.device, 1, fence, 1, VK_TIMEOUT_FOREVER)
+    let index: u32 = 0
+    let res = vkAcquireNextImageKHR(v.device, v.swapchain, VK_TIMEOUT_FOREVER,
+        vkAt(v.acquired, v.frame), 0, &index)
+    if res < 0 {
+        return false
+    }
+    vkResetFences(v.device, 1, fence)
+    v.image = int(index)
+    v.cmd = vkAt(v.cmds, v.frame)
+    vkResetCommandBuffer(v.cmd, 0)
+    let bi = VkCommandBufferBeginInfo{}
+    bi.sType = u32(ST_COMMAND_BUFFER_BEGIN_INFO)
+    bi.flags = 1 // ONE_TIME_SUBMIT
+    vkBeginCommandBuffer(v.cmd, bi)
+
+    let clears = new [8]f32
+    clears[0] = f32(r)
+    clears[1] = f32(g)
+    clears[2] = f32(b)
+    clears[3] = 1.0
+    clears[4] = 1.0 // depth
+    let rp = VkRenderPassBeginInfo{}
+    rp.sType = u32(ST_RENDER_PASS_BEGIN_INFO)
+    rp.renderPass = v.renderPass
+    rp.framebuffer = vkAt(v.framebuffers, v.image)
+    rp.width = u32(v.width)
+    rp.height = u32(v.height)
+    rp.clearValueCount = 2
+    rp.pClearValues = clears
+    vkCmdBeginRenderPass(v.cmd, rp, 0)
+    delete(clears)
+
+    let vp = VkViewport{}
+    vp.width = f32(v.width)
+    vp.height = f32(v.height)
+    vp.maxDepth = 1.0
+    vkCmdSetViewport(v.cmd, 0, 1, vp)
+    let sc = VkRect2D{}
+    sc.width = u32(v.width)
+    sc.height = u32(v.height)
+    vkCmdSetScissor(v.cmd, 0, 1, sc)
+    return true
+}
+
+pub fn vkBind(v: VK, p: VKPipeline) {
+    vkCmdBindPipeline(v.cmd, 0, p.pipeline)
+}
+
+// Sends floats to the shaders' push constant block, from byte 0: a mat4
+// is sixteen of them in column order, as the vkm functions make.
+pub fn vkPush(v: VK, p: VKPipeline, xs: []float) {
+    let n = len(xs)
+    if n * 4 > p.pushBytes { n = p.pushBytes / 4 }
+    if n == 0 { return }
+    let b = new [32]f32
+    for i in 0..n {
+        b[i] = f32(xs[i])
+    }
+    vkCmdPushConstants(v.cmd, p.layout, 1 | 0x10, 0, n * 4, b)
+    delete(b)
+}
+
+// Draws `count` vertices from the buffer with the bound pipeline.
+pub fn vkDraw(v: VK, b: VKBuffer, count: int) {
+    let bufs = new [1]ptr
+    bufs[0] = b.buffer
+    let offs = new [1]u64
+    vkCmdBindVertexBuffers(v.cmd, 0, 1, bufs, offs)
+    vkCmdDraw(v.cmd, count, 1, 0, 0)
+    delete(bufs)
+    delete(offs)
+}
+
+// Ends the frame and shows it.
+pub fn vkEnd(v: VK) {
+    vkCmdEndRenderPass(v.cmd)
+    vkSubmitAndPresent(v)
+}
+
+fn vkSubmitAndPresent(v: VK) {
+    vkEndCommandBuffer(v.cmd)
+    let stage = new [1]u32
+    stage[0] = 0x400 // COLOR_ATTACHMENT_OUTPUT
+    let cmd = new [1]ptr
+    cmd[0] = v.cmd
+    let si = VkSubmitInfo{}
+    si.sType = u32(ST_SUBMIT_INFO)
+    si.waitSemaphoreCount = 1
+    si.pWaitSemaphores = v.acquired + v.frame * 8
+    si.pWaitDstStageMask = stage
+    si.commandBufferCount = 1
+    si.pCommandBuffers = cmd
+    si.signalSemaphoreCount = 1
+    si.pSignalSemaphores = v.rendered + v.image * 8
+    vkQueueSubmit(v.queue, 1, si, vkAt(v.fences, v.frame))
+    delete(stage)
+    delete(cmd)
+
+    let index = new [1]u32
+    index[0] = u32(v.image)
+    let swap = new [1]ptr
+    swap[0] = v.swapchain
+    let pi = VkPresentInfoKHR{}
+    pi.sType = u32(ST_PRESENT_INFO)
+    pi.waitSemaphoreCount = 1
+    pi.pWaitSemaphores = v.rendered + v.image * 8
+    pi.swapchainCount = 1
+    pi.pSwapchains = swap
+    pi.pImageIndices = index
+    vkQueuePresentKHR(v.queue, pi)
+    delete(index)
+    delete(swap)
+    v.frame = (v.frame + 1) % VK_FRAMES
+}
+
+// Like vkEnd, but also copies the pixel at (x, y), counted from the top
+// left, out of the frame before it is shown, and returns it as
+// 0x00RRGGBB - the word win.rgb makes. Slow: it waits for the GPU.
+// Meant for tests and screenshots of one pixel, not for every frame.
+pub fn vkEndRead(v: VK, x: int, y: int) -> int {
+    vkCmdEndRenderPass(v.cmd)
+    if v.readBuffer == 0 {
+        let br = vkMakeBuffer(v, 16, 0x2) // TRANSFER_DST
+        if !isOk(br) {
+            vkSubmitAndPresent(v)
+            return -1
+        }
+        let b = must(br)
+        v.readBuffer = b.buffer
+        v.readMemory = b.memory
+    }
+    let image = vkAt(v.images, v.image)
+    let bar = VkImageMemoryBarrier{}
+    bar.sType = u32(ST_IMAGE_MEMORY_BARRIER)
+    bar.srcAccessMask = 0x100 // COLOR_ATTACHMENT_WRITE
+    bar.dstAccessMask = 0x800 // TRANSFER_READ
+    bar.oldLayout = u32(VK_IMAGE_LAYOUT_PRESENT_SRC)
+    bar.newLayout = u32(VK_IMAGE_LAYOUT_TRANSFER_SRC)
+    bar.srcQueueFamilyIndex = 0xFFFFFFFF
+    bar.dstQueueFamilyIndex = 0xFFFFFFFF
+    bar.image = image
+    bar.aspectMask = 1
+    bar.levelCount = 1
+    bar.layerCount = 1
+    // COLOR_ATTACHMENT_OUTPUT -> TRANSFER
+    vkCmdPipelineBarrier(v.cmd, 0x400, 0x1000, 0, 0, 0, 0, 0, 1, bar)
+    let region = VkBufferImageCopy{}
+    region.aspectMask = 1
+    region.layerCount = 1
+    region.x = i32(x)
+    region.y = i32(y)
+    region.width = 1
+    region.height = 1
+    region.depth = 1
+    vkCmdCopyImageToBuffer(v.cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC, v.readBuffer, 1, region)
+    let back = VkImageMemoryBarrier{}
+    back.sType = u32(ST_IMAGE_MEMORY_BARRIER)
+    back.srcAccessMask = 0x800
+    back.dstAccessMask = 0
+    back.oldLayout = u32(VK_IMAGE_LAYOUT_TRANSFER_SRC)
+    back.newLayout = u32(VK_IMAGE_LAYOUT_PRESENT_SRC)
+    back.srcQueueFamilyIndex = 0xFFFFFFFF
+    back.dstQueueFamilyIndex = 0xFFFFFFFF
+    back.image = image
+    back.aspectMask = 1
+    back.levelCount = 1
+    back.layerCount = 1
+    // TRANSFER -> BOTTOM_OF_PIPE
+    vkCmdPipelineBarrier(v.cmd, 0x1000, 0x2000, 0, 0, 0, 0, 0, 1, back)
+
+    let frame = v.frame
+    vkSubmitAndPresent(v)
+    vkWaitForFences(v.device, 1, v.fences + frame * 8, 1, VK_TIMEOUT_FOREVER)
+    let p = 0
+    vkMapMemory(v.device, v.readMemory, 0, 16, 0, &p)
+    let px = mem.readU32(p)
+    vkUnmapMemory(v.device, v.readMemory)
+    if v.format == VK_FORMAT_R8G8B8A8_UNORM {
+        // Bytes R, G, B, A: swap to the 0x00RRGGBB word.
+        return ((px & 0xFF) << 16) | (px & 0xFF00) | ((px >> 16) & 0xFF)
+    }
+    return px & 0xFFFFFF
+}
+
+// ---- matrices ----
+//
+// Sixteen floats in column order, like the gl package's glm functions,
+// but for Vulkan's clip space: y points down and depth runs 0 to 1. So
+// vkmPerspective flips y, and a model built with the same right-handed
+// conventions as OpenGL comes out the same way up.
+
+pub fn vkmIdentity() -> []float {
+    return [1.0, 0.0, 0.0, 0.0,
+        0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 1.0]
+}
+
+// a * b: b applied first, then a.
+pub fn vkmMul(a: []float, b: []float) -> []float {
+    let out: []float = []
+    for col in 0..4 {
+        for row in 0..4 {
+            let s = 0.0
+            for k in 0..4 {
+                s = s + a[k * 4 + row] * b[col * 4 + k]
+            }
+            push(out, s)
+        }
+    }
+    return out
+}
+
+// fovY in radians.
+pub fn vkmPerspective(fovY: float, aspect: float, near: float, far: float) -> []float {
+    let f = 1.0 / tan(fovY / 2.0)
+    let m = vkmIdentity()
+    m[0] = f / aspect
+    m[5] = -f
+    m[10] = far / (near - far)
+    m[11] = -1.0
+    m[14] = (near * far) / (near - far)
+    m[15] = 0.0
+    return m
+}
+
+pub fn vkmTranslate(x: float, y: float, z: float) -> []float {
+    let m = vkmIdentity()
+    m[12] = x
+    m[13] = y
+    m[14] = z
+    return m
+}
+
+pub fn vkmScale(x: float, y: float, z: float) -> []float {
+    let m = vkmIdentity()
+    m[0] = x
+    m[5] = y
+    m[10] = z
+    return m
+}
+
+// A rotation of `angle` radians around the axis (x, y, z).
+pub fn vkmRotate(angle: float, x: float, y: float, z: float) -> []float {
+    let l = sqrt(x * x + y * y + z * z)
+    if l == 0.0 { return vkmIdentity() }
+    let ax = x / l
+    let ay = y / l
+    let az = z / l
+    let c = cos(angle)
+    let s = sin(angle)
+    let t = 1.0 - c
+    let m = vkmIdentity()
+    m[0] = t * ax * ax + c
+    m[1] = t * ax * ay + s * az
+    m[2] = t * ax * az - s * ay
+    m[4] = t * ax * ay - s * az
+    m[5] = t * ay * ay + c
+    m[6] = t * ay * az + s * ax
+    m[8] = t * ax * az + s * ay
+    m[9] = t * ay * az - s * ax
+    m[10] = t * az * az + c
+    return m
+}
+
+// A camera at eye looking at center, with up roughly up.
+pub fn vkmLookAt(ex: float, ey: float, ez: float, cx: float, cy: float, cz: float,
+    ux: float, uy: float, uz: float) -> []float {
+    let fx = cx - ex
+    let fy = cy - ey
+    let fz = cz - ez
+    let fl = sqrt(fx * fx + fy * fy + fz * fz)
+    fx = fx / fl
+    fy = fy / fl
+    fz = fz / fl
+    let sx = fy * uz - fz * uy
+    let sy = fz * ux - fx * uz
+    let sz = fx * uy - fy * ux
+    let sl = sqrt(sx * sx + sy * sy + sz * sz)
+    sx = sx / sl
+    sy = sy / sl
+    sz = sz / sl
+    let vx = sy * fz - sz * fy
+    let vy = sz * fx - sx * fz
+    let vz = sx * fy - sy * fx
+    let m = vkmIdentity()
+    m[0] = sx
+    m[4] = sy
+    m[8] = sz
+    m[1] = vx
+    m[5] = vy
+    m[9] = vz
+    m[2] = -fx
+    m[6] = -fy
+    m[10] = -fz
+    m[12] = -(sx * ex + sy * ey + sz * ez)
+    m[13] = -(vx * ex + vy * ey + vz * ez)
+    m[14] = fx * ex + fy * ey + fz * ez
+    return m
+}
