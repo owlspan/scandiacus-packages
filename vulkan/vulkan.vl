@@ -41,9 +41,9 @@
 //
 // Needs Veyl 0.66.0 or newer, for win.handle. Windows only for now.
 //
-// Not done yet: textures, descriptor sets and uniform buffers (push
-// constants carry up to 128 bytes, enough for two matrices), resizing
-// the window, and validation layers.
+// Textures, uniform buffers and push constants are there, and a
+// resizable window (win.resizable) rebuilds the swapchain by itself.
+// Not done yet: index buffers, compute, and validation layers.
 
 // ---- structures, laid out as vulkan_core.h has them ----
 
@@ -549,6 +549,90 @@ pub extern struct VkBufferImageCopy {
     depth: u32
 }
 
+pub extern struct VkSamplerCreateInfo {
+    sType: u32
+    pNext: ptr
+    flags: u32
+    magFilter: u32
+    minFilter: u32
+    mipmapMode: u32
+    addressModeU: u32
+    addressModeV: u32
+    addressModeW: u32
+    mipLodBias: f32
+    anisotropyEnable: u32
+    maxAnisotropy: f32
+    compareEnable: u32
+    compareOp: u32
+    minLod: f32
+    maxLod: f32
+    borderColor: u32
+    unnormalizedCoordinates: u32
+}
+
+pub extern struct VkDescriptorSetLayoutBinding {
+    binding: u32
+    descriptorType: u32
+    descriptorCount: u32
+    stageFlags: u32
+    pImmutableSamplers: ptr
+}
+
+pub extern struct VkDescriptorSetLayoutCreateInfo {
+    sType: u32
+    pNext: ptr
+    flags: u32
+    bindingCount: u32
+    pBindings: ptr
+}
+
+pub extern struct VkDescriptorPoolSize {
+    kind: u32
+    descriptorCount: u32
+}
+
+pub extern struct VkDescriptorPoolCreateInfo {
+    sType: u32
+    pNext: ptr
+    flags: u32
+    maxSets: u32
+    poolSizeCount: u32
+    pPoolSizes: ptr
+}
+
+pub extern struct VkDescriptorSetAllocateInfo {
+    sType: u32
+    pNext: ptr
+    descriptorPool: ptr
+    descriptorSetCount: u32
+    pSetLayouts: ptr
+}
+
+pub extern struct VkDescriptorImageInfo {
+    sampler: ptr
+    imageView: ptr
+    imageLayout: u32
+}
+
+pub extern struct VkDescriptorBufferInfo {
+    buffer: ptr
+    offset: u64
+    range: u64
+}
+
+pub extern struct VkWriteDescriptorSet {
+    sType: u32
+    pNext: ptr
+    dstSet: ptr
+    dstBinding: u32
+    dstArrayElement: u32
+    descriptorCount: u32
+    descriptorType: u32
+    pImageInfo: ptr
+    pBufferInfo: ptr
+    pTexelBufferView: ptr
+}
+
 // ---- the functions, from vulkan-1.dll ----
 //
 // Handles and pointers are ptr; counts, flags and enums are int, of
@@ -641,6 +725,21 @@ pub extern fn vkWaitForFences(dev: ptr, count: int, fences: ptr, all: int, timeo
 pub extern fn vkResetFences(dev: ptr, count: int, fences: ptr) -> int from "vulkan-1"
 pub extern fn vkQueueSubmit(queue: ptr, count: int, submits: VkSubmitInfo, fence: ptr) -> int from "vulkan-1"
 pub extern fn vkQueueWaitIdle(queue: ptr) -> int from "vulkan-1"
+pub extern fn vkCmdCopyBufferToImage(cmd: ptr, buffer: ptr, image: ptr, layout: int, count: int,
+    regions: VkBufferImageCopy) from "vulkan-1"
+pub extern fn vkCreateSampler(dev: ptr, info: VkSamplerCreateInfo, alloc: ptr, out: ptr) -> int from "vulkan-1"
+pub extern fn vkDestroySampler(dev: ptr, sampler: ptr, alloc: ptr) from "vulkan-1"
+pub extern fn vkCreateDescriptorSetLayout(dev: ptr, info: VkDescriptorSetLayoutCreateInfo, alloc: ptr,
+    out: ptr) -> int from "vulkan-1"
+pub extern fn vkDestroyDescriptorSetLayout(dev: ptr, layout: ptr, alloc: ptr) from "vulkan-1"
+pub extern fn vkCreateDescriptorPool(dev: ptr, info: VkDescriptorPoolCreateInfo, alloc: ptr,
+    out: ptr) -> int from "vulkan-1"
+pub extern fn vkDestroyDescriptorPool(dev: ptr, pool: ptr, alloc: ptr) from "vulkan-1"
+pub extern fn vkAllocateDescriptorSets(dev: ptr, info: VkDescriptorSetAllocateInfo, out: ptr) -> int from "vulkan-1"
+pub extern fn vkUpdateDescriptorSets(dev: ptr, writeCount: int, writes: ptr, copyCount: int,
+    copies: ptr) from "vulkan-1"
+pub extern fn vkCmdBindDescriptorSets(cmd: ptr, point: int, layout: ptr, firstSet: int, count: int,
+    sets: ptr, dynamicCount: int, dynamicOffsets: ptr) from "vulkan-1"
 
 extern fn GetModuleHandleA(name: ptr) -> ptr from "kernel32"
 
@@ -658,6 +757,9 @@ const VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT = 3
 const VK_IMAGE_LAYOUT_TRANSFER_SRC = 6
 const VK_IMAGE_LAYOUT_PRESENT_SRC = 1000001002
 const VK_ERROR_OUT_OF_DATE = -1000001004
+const VK_SUBOPTIMAL = 1000001003
+const VK_IMAGE_LAYOUT_TRANSFER_DST = 7
+const VK_IMAGE_LAYOUT_SHADER_READ = 5
 const VK_TIMEOUT_FOREVER = -1
 
 // sType values
@@ -691,6 +793,11 @@ const ST_COMMAND_BUFFER_ALLOCATE_INFO = 40
 const ST_COMMAND_BUFFER_BEGIN_INFO = 42
 const ST_RENDER_PASS_BEGIN_INFO = 43
 const ST_IMAGE_MEMORY_BARRIER = 45
+const ST_SAMPLER_CREATE_INFO = 31
+const ST_DESCRIPTOR_SET_LAYOUT_CREATE_INFO = 32
+const ST_DESCRIPTOR_POOL_CREATE_INFO = 33
+const ST_DESCRIPTOR_SET_ALLOCATE_INFO = 34
+const ST_WRITE_DESCRIPTOR_SET = 35
 const ST_SWAPCHAIN_CREATE_INFO = 1000001000
 const ST_PRESENT_INFO = 1000001001
 const ST_WIN32_SURFACE_CREATE_INFO = 1000009000
@@ -732,12 +839,18 @@ pub extern struct VK {
     cmd: i64
     readBuffer: i64
     readMemory: i64
+    window: i64
+    stale: i64
+    sampler: i64
 }
 
 pub struct VKPipeline {
     pipeline: int
     layout: int
     pushBytes: int
+    setLayout: int
+    uniformBytes: int
+    textures: int
 }
 
 pub struct VKBuffer {
@@ -891,6 +1004,7 @@ pub fn vkOpen(w: int) -> VK! {
     vkGetDeviceQueue(v.device, v.family, 0, &q)
     v.queue = q
 
+    v.window = w
     let built = vkBuildFrames(v, win.width(w), win.height(w))
     if !isOk(built) {
         vkClose(v)
@@ -1024,8 +1138,15 @@ fn vkBuildFrames(v: VK, width: int, height: int) -> void! {
     sc.compositeAlpha = u32(alpha)
     sc.presentMode = u32(VK_PRESENT_MODE_FIFO)
     sc.clipped = 1
+    sc.oldSwapchain = v.swapchain
     let swapchain = 0
-    vkCheck("vkCreateSwapchainKHR", vkCreateSwapchainKHR(v.device, sc, 0, &swapchain))?
+    let rc = vkCreateSwapchainKHR(v.device, sc, 0, &swapchain)
+    // The old one is retired either way once a new one was asked for.
+    if v.swapchain != 0 {
+        vkDestroySwapchainKHR(v.device, v.swapchain, 0)
+        v.swapchain = 0
+    }
+    vkCheck("vkCreateSwapchainKHR", rc)?
     v.swapchain = swapchain
 
     let icount: u32 = 0
@@ -1041,7 +1162,9 @@ fn vkBuildFrames(v: VK, width: int, height: int) -> void! {
     }
 
     vkBuildDepth(v)?
-    vkBuildRenderPass(v)?
+    if v.renderPass == 0 {
+        vkBuildRenderPass(v)?
+    }
 
     v.framebuffers = mem.alloc(v.imageCount * 8)
     let attach = mem.alloc(16)
@@ -1062,9 +1185,25 @@ fn vkBuildFrames(v: VK, width: int, height: int) -> void! {
     }
     mem.free(attach)
 
-    // One command buffer, one acquire semaphore and one fence per frame
-    // in flight; one render-done semaphore per swapchain image, since
-    // presenting holds it until that image comes round again.
+    // One render-done semaphore per swapchain image, since presenting
+    // holds it until that image comes round again.
+    let semInfo = VkSemaphoreCreateInfo{}
+    semInfo.sType = u32(ST_SEMAPHORE_CREATE_INFO)
+    v.rendered = mem.alloc(v.imageCount * 8)
+    for i in 0..v.imageCount {
+        let s = 0
+        vkCheck("vkCreateSemaphore", vkCreateSemaphore(v.device, semInfo, 0, &s))?
+        mem.write64(v.rendered + i * 8, s)
+    }
+    if v.pool == 0 {
+        vkBuildSync(v)?
+    }
+}
+
+// One command buffer, one acquire semaphore and one fence per frame in
+// flight, and a spare command buffer for one-off uploads. These outlive
+// a swapchain rebuild.
+fn vkBuildSync(v: VK) -> void! {
     let pi = VkCommandPoolCreateInfo{}
     pi.sType = u32(ST_COMMAND_POOL_CREATE_INFO)
     pi.flags = 2 // RESET_COMMAND_BUFFER
@@ -1094,12 +1233,49 @@ fn vkBuildFrames(v: VK, width: int, height: int) -> void! {
         vkCheck("vkCreateFence", vkCreateFence(v.device, fenceInfo, 0, &f))?
         mem.write64(v.fences + i * 8, f)
     }
-    v.rendered = mem.alloc(v.imageCount * 8)
+}
+
+// Frees what is sized by the swapchain, leaving the swapchain itself,
+// which the next one is made from.
+fn vkFreeSized(v: VK) {
     for i in 0..v.imageCount {
-        let s = 0
-        vkCheck("vkCreateSemaphore", vkCreateSemaphore(v.device, semInfo, 0, &s))?
-        mem.write64(v.rendered + i * 8, s)
+        if v.rendered != 0 { vkDestroySemaphore(v.device, vkAt(v.rendered, i), 0) }
+        if v.framebuffers != 0 { vkDestroyFramebuffer(v.device, vkAt(v.framebuffers, i), 0) }
+        if v.views != 0 { vkDestroyImageView(v.device, vkAt(v.views, i), 0) }
     }
+    if v.depthView != 0 { vkDestroyImageView(v.device, v.depthView, 0) }
+    if v.depthImage != 0 { vkDestroyImage(v.device, v.depthImage, 0) }
+    if v.depthMemory != 0 { vkFreeMemory(v.device, v.depthMemory, 0) }
+    mem.free(v.images)
+    mem.free(v.views)
+    mem.free(v.framebuffers)
+    mem.free(v.rendered)
+    v.images = 0
+    v.views = 0
+    v.framebuffers = 0
+    v.rendered = 0
+    v.depthView = 0
+    v.depthImage = 0
+    v.depthMemory = 0
+    v.imageCount = 0
+}
+
+// A new swapchain at the window's current size, after a resize or when
+// the old one went out of date. False while the window has no area,
+// minimised for instance; vkBegin tries again next frame.
+fn vkRebuild(v: VK) -> bool {
+    let w = win.width(v.window)
+    let h = win.height(v.window)
+    if w <= 0 || h <= 0 {
+        return false
+    }
+    vkDeviceWaitIdle(v.device)
+    vkFreeSized(v)
+    if !isOk(vkBuildFrames(v, w, h)) {
+        return false
+    }
+    v.stale = 0
+    return true
 }
 
 // aspect 1 is color, 2 depth.
@@ -1210,27 +1386,17 @@ pub fn vkClose(v: VK) {
             if v.acquired != 0 { vkDestroySemaphore(v.device, vkAt(v.acquired, i), 0) }
             if v.fences != 0 { vkDestroyFence(v.device, vkAt(v.fences, i), 0) }
         }
-        for i in 0..v.imageCount {
-            if v.rendered != 0 { vkDestroySemaphore(v.device, vkAt(v.rendered, i), 0) }
-            if v.framebuffers != 0 { vkDestroyFramebuffer(v.device, vkAt(v.framebuffers, i), 0) }
-            if v.views != 0 { vkDestroyImageView(v.device, vkAt(v.views, i), 0) }
-        }
+        vkFreeSized(v)
+        if v.sampler != 0 { vkDestroySampler(v.device, v.sampler, 0) }
         if v.pool != 0 { vkDestroyCommandPool(v.device, v.pool, 0) }
         if v.renderPass != 0 { vkDestroyRenderPass(v.device, v.renderPass, 0) }
-        if v.depthView != 0 { vkDestroyImageView(v.device, v.depthView, 0) }
-        if v.depthImage != 0 { vkDestroyImage(v.device, v.depthImage, 0) }
-        if v.depthMemory != 0 { vkFreeMemory(v.device, v.depthMemory, 0) }
         if v.swapchain != 0 { vkDestroySwapchainKHR(v.device, v.swapchain, 0) }
         vkDestroyDevice(v.device, 0)
     }
     if v.surface != 0 { vkDestroySurfaceKHR(v.instance, v.surface, 0) }
     if v.instance != 0 { vkDestroyInstance(v.instance, 0) }
-    mem.free(v.images)
-    mem.free(v.views)
-    mem.free(v.framebuffers)
     mem.free(v.cmds)
     mem.free(v.acquired)
-    mem.free(v.rendered)
     mem.free(v.fences)
     mem.free(v.memProps)
     mem.free(mem.addr(v))
@@ -1264,12 +1430,29 @@ pub fn vkSpirvHex(text: str) -> bytes! {
 // A graphics pipeline from a vertex and a fragment shader. `attrs` is
 // the float count of each vertex attribute in order - [3, 3] is
 // location 0 a vec3 and location 1 a vec3, 24 bytes a vertex.
-// `pushBytes` is how much vkPush may send to the vertex shader, up to
-// 128. Triangles, depth tested, no culling, no blending.
+// `pushBytes` is how much vkPush may send to the shaders, up to 128.
+// Triangles, depth tested, no culling, no blending.
 pub fn vkPipeline(v: VK, vertexSpirv: bytes, fragmentSpirv: bytes, attrs: []int,
     pushBytes: int) -> VKPipeline! {
+    return vkPipelineWith(v, vertexSpirv, fragmentSpirv, attrs, pushBytes, 0, 0)
+}
+
+// The same, with resources in descriptor set 0: when uniformBytes is
+// more than 0, binding 0 is a uniform block of that size, and bindings
+// 1 to `textures` are sampler2Ds. In GLSL:
+//
+//     layout(set = 0, binding = 0) uniform U { mat4 viewProj; } u;
+//     layout(set = 0, binding = 1) uniform sampler2D tex;
+//
+// vkResources then says which uniform and textures the draws use.
+pub fn vkPipelineWith(v: VK, vertexSpirv: bytes, fragmentSpirv: bytes, attrs: []int,
+    pushBytes: int, uniformBytes: int, textures: int) -> VKPipeline! {
     if pushBytes > 128 {
         return fail("vulkan: push constants are limited to 128 bytes")
+    }
+    let setLayout = 0
+    if uniformBytes > 0 || textures > 0 {
+        setLayout = vkMakeSetLayout(v, uniformBytes > 0, textures)?
     }
     let vs = vkShaderModule(v, vertexSpirv)?
     let fsr = vkShaderModule(v, fragmentSpirv)
@@ -1355,6 +1538,12 @@ pub fn vkPipeline(v: VK, vertexSpirv: bytes, fragmentSpirv: bytes, attrs: []int,
     push.size = u32(pushBytes)
     let li = VkPipelineLayoutCreateInfo{}
     li.sType = u32(ST_PIPELINE_LAYOUT_CREATE_INFO)
+    let setLayouts = new [1]ptr
+    setLayouts[0] = setLayout
+    if setLayout != 0 {
+        li.setLayoutCount = 1
+        li.pSetLayouts = setLayouts
+    }
     if pushBytes > 0 {
         li.pushConstantRangeCount = 1
         li.pPushConstantRanges = mem.addr(push)
@@ -1389,20 +1578,60 @@ pub fn vkPipeline(v: VK, vertexSpirv: bytes, fragmentSpirv: bytes, attrs: []int,
     mem.free(stages)
     mem.free(descs)
     mem.free(dyn)
-    if rl < 0 {
-        return fail("vulkan: vkCreatePipelineLayout failed: {vkResultText(rl)}")
-    }
-    if rp < 0 {
-        vkDestroyPipelineLayout(v.device, layout, 0)
+    delete(setLayouts)
+    if rl < 0 || rp < 0 {
+        if rl >= 0 { vkDestroyPipelineLayout(v.device, layout, 0) }
+        if setLayout != 0 { vkDestroyDescriptorSetLayout(v.device, setLayout, 0) }
+        if rl < 0 {
+            return fail("vulkan: vkCreatePipelineLayout failed: {vkResultText(rl)}")
+        }
         return fail("vulkan: vkCreateGraphicsPipelines failed: {vkResultText(rp)}")
     }
-    return VKPipeline{pipeline: pipeline, layout: layout, pushBytes: pushBytes}
+    return VKPipeline{ pipeline: pipeline, layout: layout, pushBytes: pushBytes,
+        setLayout: setLayout, uniformBytes: uniformBytes, textures: textures }
 }
 
 pub fn vkFreePipeline(v: VK, p: VKPipeline) {
     vkDeviceWaitIdle(v.device)
     vkDestroyPipeline(v.device, p.pipeline, 0)
     vkDestroyPipelineLayout(v.device, p.layout, 0)
+    if p.setLayout != 0 {
+        vkDestroyDescriptorSetLayout(v.device, p.setLayout, 0)
+    }
+}
+
+// Binding 0 a uniform buffer when withUniform, then `textures` combined
+// image samplers, all seen by both stages.
+fn vkMakeSetLayout(v: VK, withUniform: bool, textures: int) -> int! {
+    let n = textures
+    if withUniform { n = n + 1 }
+    let size = VkDescriptorSetLayoutBinding.size
+    let list = mem.alloc(size * n)
+    let k = 0
+    if withUniform {
+        let b = VkDescriptorSetLayoutBinding(list)
+        b.binding = 0
+        b.descriptorType = 6 // UNIFORM_BUFFER
+        b.descriptorCount = 1
+        b.stageFlags = 1 | 0x10
+        k = 1
+    }
+    for i in 0..textures {
+        let b = VkDescriptorSetLayoutBinding(list + (k + i) * size)
+        b.binding = u32(1 + i)
+        b.descriptorType = 1 // COMBINED_IMAGE_SAMPLER
+        b.descriptorCount = 1
+        b.stageFlags = 1 | 0x10
+    }
+    let li = VkDescriptorSetLayoutCreateInfo{}
+    li.sType = u32(ST_DESCRIPTOR_SET_LAYOUT_CREATE_INFO)
+    li.bindingCount = u32(n)
+    li.pBindings = list
+    let layout = 0
+    let r = vkCreateDescriptorSetLayout(v.device, li, 0, &layout)
+    mem.free(list)
+    vkCheck("vkCreateDescriptorSetLayout", r)?
+    return layout
 }
 
 // ---- buffers ----
@@ -1456,6 +1685,319 @@ pub fn vkFreeBuffer(v: VK, b: VKBuffer) {
     vkFreeMemory(v.device, b.memory, 0)
 }
 
+// ---- uniform buffers ----
+
+// One copy per frame in flight, each mapped for good, so writing this
+// frame's never touches memory the GPU is still reading for the last.
+pub struct VKUniform {
+    buffers: []int
+    memories: []int
+    mapped: []int
+    size: int
+}
+
+pub fn vkUniform(v: VK, size: int) -> VKUniform! {
+    let u = VKUniform{buffers: [], memories: [], mapped: [], size: size}
+    for i in 0..VK_FRAMES {
+        let b = vkMakeBuffer(v, size, 0x10)? // UNIFORM_BUFFER
+        let p = 0
+        vkMapMemory(v.device, b.memory, 0, size, 0, &p)
+        push(u.buffers, b.buffer)
+        push(u.memories, b.memory)
+        push(u.mapped, p)
+    }
+    return u
+}
+
+// Writes floats from the start of this frame's copy. Call it between
+// vkBegin and vkEnd, before the draws that read it.
+pub fn vkWriteUniform(v: VK, u: VKUniform, xs: []float) {
+    let f = u.mapped[v.frame] as *f32
+    let n = len(xs)
+    if n * 4 > u.size { n = u.size / 4 }
+    for i in 0..n {
+        f[i] = f32(xs[i])
+    }
+}
+
+pub fn vkFreeUniform(v: VK, u: VKUniform) {
+    vkDeviceWaitIdle(v.device)
+    for i in 0..len(u.buffers) {
+        vkUnmapMemory(v.device, u.memories[i])
+        vkDestroyBuffer(v.device, u.buffers[i], 0)
+        vkFreeMemory(v.device, u.memories[i], 0)
+    }
+}
+
+// ---- textures ----
+
+pub struct VKTexture {
+    image: int
+    memory: int
+    view: int
+    width: int
+    height: int
+}
+
+// The sampler every texture is read through: linear, repeating.
+fn vkSampler(v: VK) -> int! {
+    if v.sampler != 0 {
+        return v.sampler
+    }
+    let si = VkSamplerCreateInfo{}
+    si.sType = u32(ST_SAMPLER_CREATE_INFO)
+    si.magFilter = 1 // LINEAR
+    si.minFilter = 1
+    si.mipmapMode = 1
+    si.maxLod = 1.0
+    let s = 0
+    vkCheck("vkCreateSampler", vkCreateSampler(v.device, si, 0, &s))?
+    v.sampler = s
+    return s
+}
+
+fn vkLayoutBarrier(cmd: int, image: int, from: int, to: int, srcAccess: int, dstAccess: int,
+    srcStage: int, dstStage: int) {
+    let bar = VkImageMemoryBarrier{}
+    bar.sType = u32(ST_IMAGE_MEMORY_BARRIER)
+    bar.srcAccessMask = u32(srcAccess)
+    bar.dstAccessMask = u32(dstAccess)
+    bar.oldLayout = u32(from)
+    bar.newLayout = u32(to)
+    bar.srcQueueFamilyIndex = 0xFFFFFFFF
+    bar.dstQueueFamilyIndex = 0xFFFFFFFF
+    bar.image = image
+    bar.aspectMask = 1
+    bar.levelCount = 1
+    bar.layerCount = 1
+    vkCmdPipelineBarrier(cmd, srcStage, dstStage, 0, 0, 0, 0, 0, 1, bar)
+}
+
+// A texture from w * h pixels at `pixels`, each a 0x00RRGGBB word, rows
+// top to bottom: what win.pixels gives for a canvas. Alpha is made 255.
+// It is copied through a staging buffer into device memory and this
+// waits for the GPU, so make textures before the loop, not in it.
+pub fn vkTexture(v: VK, pixels: int, w: int, h: int) -> VKTexture! {
+    if w <= 0 || h <= 0 {
+        return fail("vulkan: a texture needs a size")
+    }
+    let size = w * h * 4
+    let staging = vkMakeBuffer(v, size, 0x1)? // TRANSFER_SRC
+    let p = 0
+    vkMapMemory(v.device, staging.memory, 0, size, 0, &p)
+    let dst = p as *u32
+    let src = pixels as *u32
+    for i in 0..w * h {
+        dst[i] = src[i] | 0xFF000000
+    }
+    vkUnmapMemory(v.device, staging.memory)
+
+    let ii = VkImageCreateInfo{}
+    ii.sType = u32(ST_IMAGE_CREATE_INFO)
+    ii.imageType = 1
+    ii.format = u32(VK_FORMAT_B8G8R8A8_UNORM)
+    ii.width = u32(w)
+    ii.height = u32(h)
+    ii.depth = 1
+    ii.mipLevels = 1
+    ii.arrayLayers = 1
+    ii.samples = 1
+    ii.usage = 0x2 | 0x4 // TRANSFER_DST | SAMPLED
+    let image = 0
+    let ri = vkCreateImage(v.device, ii, 0, &image)
+    if ri < 0 {
+        vkFreeBuffer(v, staging)
+        return fail("vulkan: vkCreateImage failed: {vkResultText(ri)}")
+    }
+    let req = VkMemoryRequirements{}
+    vkGetImageMemoryRequirements(v.device, image, req)
+    let mr = vkAllocateFor(v, req, 1)
+    if !isOk(mr) {
+        vkDestroyImage(v.device, image, 0)
+        vkFreeBuffer(v, staging)
+    }
+    let memory = mr?
+    vkBindImageMemory(v.device, image, memory, 0)
+
+    let cmd = vkAt(v.cmds, VK_FRAMES)
+    vkResetCommandBuffer(cmd, 0)
+    let bi = VkCommandBufferBeginInfo{}
+    bi.sType = u32(ST_COMMAND_BUFFER_BEGIN_INFO)
+    bi.flags = 1
+    vkBeginCommandBuffer(cmd, bi)
+    // TOP_OF_PIPE -> TRANSFER, then TRANSFER -> FRAGMENT_SHADER
+    vkLayoutBarrier(cmd, image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST,
+        0, 0x1000, 0x1, 0x1000)
+    let region = VkBufferImageCopy{}
+    region.aspectMask = 1
+    region.layerCount = 1
+    region.width = u32(w)
+    region.height = u32(h)
+    region.depth = 1
+    vkCmdCopyBufferToImage(cmd, staging.buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST, 1, region)
+    vkLayoutBarrier(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_DST, VK_IMAGE_LAYOUT_SHADER_READ,
+        0x1000, 0x20, 0x1000, 0x80)
+    vkEndCommandBuffer(cmd)
+    let cmds = new [1]ptr
+    cmds[0] = cmd
+    let si = VkSubmitInfo{}
+    si.sType = u32(ST_SUBMIT_INFO)
+    si.commandBufferCount = 1
+    si.pCommandBuffers = cmds
+    vkQueueSubmit(v.queue, 1, si, 0)
+    vkQueueWaitIdle(v.queue)
+    delete(cmds)
+    vkFreeBuffer(v, staging)
+
+    let vr = vkView(v, image, VK_FORMAT_B8G8R8A8_UNORM, 1)
+    if !isOk(vr) {
+        vkDestroyImage(v.device, image, 0)
+        vkFreeMemory(v.device, memory, 0)
+    }
+    let view = vr?
+    return VKTexture{image: image, memory: memory, view: view, width: w, height: h}
+}
+
+// A texture from an image win.image loaded, drawn into a canvas first
+// to get at its pixels.
+pub fn vkTextureFromImage(v: VK, img: int) -> VKTexture! {
+    let w = win.imageWidth(img)
+    let h = win.imageHeight(img)
+    let c = win.canvas(w, h)
+    win.draw(c, img, 0, 0)
+    let t = vkTexture(v, win.pixels(c) as int, w, h)
+    win.close(c)
+    return t
+}
+
+pub fn vkFreeTexture(v: VK, t: VKTexture) {
+    vkDeviceWaitIdle(v.device)
+    vkDestroyImageView(v.device, t.view, 0)
+    vkDestroyImage(v.device, t.image, 0)
+    vkFreeMemory(v.device, t.memory, 0)
+}
+
+// ---- resources: what a pipeline's set 0 points at ----
+
+pub struct VKResources {
+    pool: int
+    sets: []int
+}
+
+// A descriptor set per frame in flight for pipeline p, pointing at u
+// (ignored when p has no uniform block - pass VKUniform{}) and at each
+// texture in order.
+pub fn vkResources(v: VK, p: VKPipeline, u: VKUniform, textures: []VKTexture) -> VKResources! {
+    if p.setLayout == 0 {
+        return fail("vulkan: this pipeline takes no resources - make it with vkPipelineWith")
+    }
+    if len(textures) != p.textures {
+        return fail("vulkan: the pipeline takes {p.textures} textures, not {len(textures)}")
+    }
+    if p.uniformBytes > 0 && len(u.buffers) != VK_FRAMES {
+        return fail("vulkan: the pipeline takes a uniform buffer - make one with vkUniform")
+    }
+    let sampler = vkSampler(v)?
+
+    let sizes = mem.alloc(16)
+    let count = 0
+    if p.uniformBytes > 0 {
+        mem.write32(sizes, 6)
+        mem.write32(sizes + 4, VK_FRAMES)
+        count = 1
+    }
+    if p.textures > 0 {
+        mem.write32(sizes + count * 8, 1)
+        mem.write32(sizes + count * 8 + 4, VK_FRAMES * p.textures)
+        count += 1
+    }
+    let pi = VkDescriptorPoolCreateInfo{}
+    pi.sType = u32(ST_DESCRIPTOR_POOL_CREATE_INFO)
+    pi.maxSets = u32(VK_FRAMES)
+    pi.poolSizeCount = u32(count)
+    pi.pPoolSizes = sizes
+    let pool = 0
+    let rp = vkCreateDescriptorPool(v.device, pi, 0, &pool)
+    mem.free(sizes)
+    vkCheck("vkCreateDescriptorPool", rp)?
+
+    let layouts = new [2]ptr
+    for i in 0..VK_FRAMES {
+        layouts[i] = p.setLayout
+    }
+    let ai = VkDescriptorSetAllocateInfo{}
+    ai.sType = u32(ST_DESCRIPTOR_SET_ALLOCATE_INFO)
+    ai.descriptorPool = pool
+    ai.descriptorSetCount = u32(VK_FRAMES)
+    ai.pSetLayouts = layouts
+    let raw = new [2]ptr
+    let ra = vkAllocateDescriptorSets(v.device, ai, raw)
+    delete(layouts)
+    if ra < 0 {
+        delete(raw)
+        vkDestroyDescriptorPool(v.device, pool, 0)
+        return fail("vulkan: vkAllocateDescriptorSets failed: {vkResultText(ra)}")
+    }
+    let res = VKResources{pool: pool, sets: []}
+    for i in 0..VK_FRAMES {
+        push(res.sets, int(raw[i]))
+    }
+    delete(raw)
+
+    let n = p.textures
+    if p.uniformBytes > 0 { n += 1 }
+    let wsize = VkWriteDescriptorSet.size
+    let writes = mem.alloc(wsize * n)
+    let infos = mem.alloc(24 * n)
+    for f in 0..VK_FRAMES {
+        mem.fill(writes, 0, wsize * n)
+        let k = 0
+        if p.uniformBytes > 0 {
+            let bi = VkDescriptorBufferInfo(infos)
+            bi.buffer = u.buffers[f]
+            bi.range = u64(p.uniformBytes)
+            let wr = VkWriteDescriptorSet(writes)
+            wr.sType = u32(ST_WRITE_DESCRIPTOR_SET)
+            wr.dstSet = res.sets[f]
+            wr.dstBinding = 0
+            wr.descriptorCount = 1
+            wr.descriptorType = 6
+            wr.pBufferInfo = infos
+            k = 1
+        }
+        for i in 0..p.textures {
+            let ii = VkDescriptorImageInfo(infos + (k + i) * 24)
+            ii.sampler = sampler
+            ii.imageView = textures[i].view
+            ii.imageLayout = u32(VK_IMAGE_LAYOUT_SHADER_READ)
+            let wr = VkWriteDescriptorSet(writes + (k + i) * wsize)
+            wr.sType = u32(ST_WRITE_DESCRIPTOR_SET)
+            wr.dstSet = res.sets[f]
+            wr.dstBinding = u32(1 + i)
+            wr.descriptorCount = 1
+            wr.descriptorType = 1
+            wr.pImageInfo = infos + (k + i) * 24
+        }
+        vkUpdateDescriptorSets(v.device, n, writes, 0, 0)
+    }
+    mem.free(writes)
+    mem.free(infos)
+    return res
+}
+
+// Points the draws that follow at r, for this frame.
+pub fn vkUse(v: VK, p: VKPipeline, r: VKResources) {
+    let set = new [1]ptr
+    set[0] = r.sets[v.frame]
+    vkCmdBindDescriptorSets(v.cmd, 0, p.layout, 0, 1, set, 0, 0)
+    delete(set)
+}
+
+pub fn vkFreeResources(v: VK, r: VKResources) {
+    vkDeviceWaitIdle(v.device)
+    vkDestroyDescriptorPool(v.device, r.pool, 0)
+}
+
 // Waits until the GPU has finished everything submitted so far.
 pub fn vkWait(v: VK) {
     vkDeviceWaitIdle(v.device)
@@ -1467,12 +2009,20 @@ pub fn vkWait(v: VK) {
 // there is nothing to draw into this time - the window is minimised or
 // the swapchain went out of date - and then vkEnd must not be called.
 pub fn vkBegin(v: VK, r: float, g: float, b: float) -> bool {
+    if v.stale != 0 || win.width(v.window) != v.width || win.height(v.window) != v.height {
+        if !vkRebuild(v) {
+            return false
+        }
+    }
     let fence = v.fences + v.frame * 8
     vkWaitForFences(v.device, 1, fence, 1, VK_TIMEOUT_FOREVER)
     let index: u32 = 0
     let res = vkAcquireNextImageKHR(v.device, v.swapchain, VK_TIMEOUT_FOREVER,
         vkAt(v.acquired, v.frame), 0, &index)
     if res < 0 {
+        // Out of date: the window changed under the swapchain. The
+        // semaphore was not signalled, so nothing is waiting on it.
+        v.stale = 1
         return false
     }
     vkResetFences(v.device, 1, fence)
@@ -1578,7 +2128,10 @@ fn vkSubmitAndPresent(v: VK) {
     pi.swapchainCount = 1
     pi.pSwapchains = swap
     pi.pImageIndices = index
-    vkQueuePresentKHR(v.queue, pi)
+    let pr = vkQueuePresentKHR(v.queue, pi)
+    if pr == VK_ERROR_OUT_OF_DATE || pr == VK_SUBOPTIMAL {
+        v.stale = 1
+    }
     delete(index)
     delete(swap)
     v.frame = (v.frame + 1) % VK_FRAMES
