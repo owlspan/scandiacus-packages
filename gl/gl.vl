@@ -20,15 +20,16 @@
 // frame instead, and the win.* drawing functions are not used on a
 // window with a context.
 //
-// glOpen asks for a context the old way, through wglCreateContext,
-// which every Windows driver answers with the newest compatibility
-// profile it has - OpenGL 4.6 on current AMD, NVIDIA and Intel drivers.
-// So shaders, buffers, vertex arrays and framebuffers are all there,
-// and so are the old fixed-function calls. glVersion() says what was
-// given.
+// glOpen asks for a context the old way - wglCreateContext on Windows,
+// glXCreateNewContext on Linux - which drivers answer with the newest
+// compatibility profile they have: OpenGL 4.6 on current AMD, NVIDIA
+// and Intel drivers, 4.5 on Mesa. So shaders, buffers, vertex arrays
+// and framebuffers are all there, and so are the old fixed-function
+// calls. glVersion() says what was given.
 //
-// Needs Veyl 0.66.0 or newer, for win.handle. Windows only for now; on
-// Linux and macOS glOpen fails rather than guessing.
+// Windows and Linux (X11). Needs Veyl 0.67.0 or newer, for win.display
+// and mem.call off Windows. Not macOS: Apple stopped OpenGL at 4.1 and
+// deprecated it.
 //
 // The OpenGL 1.1 calls are the real functions, declared with extern, so
 // their float parameters are C floats: a literal passes as it is, a
@@ -37,9 +38,9 @@
 //
 // How the calls get made. opengl32.dll exports only OpenGL 1.1; every
 // later function is a pointer the driver hands out once a context is
-// current. The 1.1 calls are declared with extern below. The rest are
-// looked up by glOpen into the vars further down and called through
-// mem.call. mem.call passes a float as a double, which is wrong for a
+// current. The 1.1 calls are declared with extern below, which a Linux
+// build takes from libGL.so.1. The rest are looked up by glOpen into
+// the vars further down and called through mem.call. mem.call passes a float as a double, which is wrong for a
 // GLfloat parameter, so the float-taking calls go through their
 // pointer forms (glUniform1f is glUniform1fv on a one-float buffer).
 //
@@ -225,6 +226,9 @@ pub const GL_VIEWPORT = 0x0BA2
 
 // ---- the context ----
 
+// One context on one window. On Windows hwnd, dc and rc are the HWND,
+// its device context and the WGL context; on Linux the X11 Window, the
+// Display and the GLX context.
 pub struct GL {
     hwnd: int
     dc: int
@@ -236,20 +240,34 @@ const PFD_DRAW_TO_WINDOW = 0x04
 const PFD_SUPPORT_OPENGL = 0x20
 const PFD_DOUBLEBUFFER = 0x01
 
-// Gives the window a 32-bit color, 24-bit depth, 8-bit stencil
-// double-buffered format, makes a context on it current, and loads the
+// Gives the window a double-buffered format with 24 bits of color and a
+// 24-bit depth buffer, makes a context on it current, and loads the
 // functions past OpenGL 1.1. Fails, naming what was missing, rather
 // than handing back a context the first draw would crash on.
 pub fn glOpen(w: int) -> GL! {
-    if os.name() != "windows" {
-        return fail("gl: only Windows is supported so far")
+    let g = GL{}
+    if os.name() == "windows" {
+        g = glOpenWGL(w)?
+    } else if os.name() == "linux" {
+        g = glOpenGLX(w)?
+    } else {
+        return fail("gl: {os.name()} is not supported yet - Windows and Linux are")
     }
+    let missing = glLoad()
+    if missing != "" {
+        glClose(g)
+        return fail("gl: the driver has no {missing} - OpenGL 3.3 or newer is needed")
+    }
+    glViewport(0, 0, win.width(w), win.height(w))
+    return g
+}
+
+fn glOpenWGL(w: int) -> GL! {
     let hwnd = win.handle(w)
     let dc = GetDC(hwnd)
     if dc == 0 {
         return fail("gl: the window has no device context")
     }
-
     let pfd = GLPixelFormat{}
     pfd.size = 40
     pfd.version = 1
@@ -265,7 +283,6 @@ pub fn glOpen(w: int) -> GL! {
     if !SetPixelFormat(dc, format, pfd) {
         return fail("gl: the window refused the pixel format")
     }
-
     let rc = wglCreateContext(dc)
     if rc == 0 {
         return fail("gl: the driver would not make a context")
@@ -274,20 +291,105 @@ pub fn glOpen(w: int) -> GL! {
         wglDeleteContext(rc)
         return fail("gl: the context could not be made current")
     }
-
-    let missing = glLoad()
-    if missing != "" {
-        wglMakeCurrent(0, 0)
-        wglDeleteContext(rc)
-        return fail("gl: the driver has no {missing} - OpenGL 3.3 or newer is needed")
-    }
-    glViewport(0, 0, win.width(w), win.height(w))
     return GL{hwnd: hwnd, dc: dc, rc: rc}
 }
 
+// ---- Linux: GLX ----
+//
+// libGL and libX11 are reached through mem.symbol and mem.call, so none
+// of it is linked into a Windows build. The window was made by the win
+// library with the screen's default visual, which cannot be changed
+// after the fact, so the framebuffer config chosen is one whose visual
+// is that one.
+
+const GLX_LIB = "libGL.so.1"
+const X11_LIB = "libX11.so.6"
+const GLX_RGBA_TYPE = 0x8014
+const GLX_VISUAL_ID = 0x800B
+
+fn glxSym(lib: str, name: str) -> int! {
+    let p = mem.symbol(lib, name)
+    if p == 0 {
+        return fail("gl: {name} was not found in {lib} - is OpenGL installed?")
+    }
+    return p
+}
+
+// The first framebuffer config matching attrs (pairs, ending in 0)
+// whose visual is the window's, or 0 when there is none.
+fn glxConfig(dpy: int, screen: int, visual: int, attrs: []int) -> int! {
+    let choose = glxSym(GLX_LIB, "glXChooseFBConfig")?
+    let attrib = glxSym(GLX_LIB, "glXGetFBConfigAttrib")?
+    let xfree = glxSym(X11_LIB, "XFree")?
+    let list = new [32]i32
+    for i in 0..len(attrs) {
+        list[i] = i32(attrs[i])
+    }
+    let n: i32 = 0
+    let configs = mem.call(choose, dpy, screen, list, &n)
+    delete(list)
+    if configs == 0 {
+        return 0
+    }
+    let found = 0
+    for i in 0..int(n) {
+        let cfg = mem.readI64(configs + i * 8)
+        let id: i32 = 0
+        mem.call(attrib, dpy, cfg, GLX_VISUAL_ID, &id)
+        if int(id) == visual {
+            found = cfg
+            break
+        }
+    }
+    mem.call(xfree, configs)
+    return found
+}
+
+fn glOpenGLX(w: int) -> GL! {
+    let dpy = win.display(w)
+    let xwin = win.handle(w)
+    if dpy == 0 || xwin == 0 {
+        return fail("gl: the window has no X11 display")
+    }
+    let screen = mem.call(glxSym(X11_LIB, "XDefaultScreen")?, dpy) & 0xFFFFFFFF
+    let visual = mem.call(glxSym(X11_LIB, "XVisualIDFromVisual")?,
+        mem.call(glxSym(X11_LIB, "XDefaultVisual")?, dpy, screen))
+
+    // GLX_X_RENDERABLE, GLX_DRAWABLE_TYPE window, GLX_RENDER_TYPE rgba,
+    // GLX_DOUBLEBUFFER, 8 bits a channel, then GLX_DEPTH_SIZE 24 - and
+    // without the depth buffer when no such config has the visual.
+    let withDepth = [0x8012, 1, 0x8010, 1, 0x8011, 1, 5, 1, 8, 8, 9, 8, 10, 8, 12, 24, 0]
+    let cfg = glxConfig(dpy, screen, visual, withDepth)?
+    if cfg == 0 {
+        let plain = [0x8012, 1, 0x8010, 1, 0x8011, 1, 5, 1, 8, 8, 9, 8, 10, 8, 0]
+        cfg = glxConfig(dpy, screen, visual, plain)?
+    }
+    if cfg == 0 {
+        return fail("gl: no double-buffered OpenGL config matches the window's visual")
+    }
+
+    let ctx = mem.call(glxSym(GLX_LIB, "glXCreateNewContext")?, dpy, cfg, GLX_RGBA_TYPE, 0, 1)
+    if ctx == 0 {
+        return fail("gl: the driver would not make a context")
+    }
+    let made = mem.call(glxSym(GLX_LIB, "glXMakeCurrent")?, dpy, xwin, ctx) & 0xFFFFFFFF
+    if made == 0 {
+        mem.call(glxSym(GLX_LIB, "glXDestroyContext")?, dpy, ctx)
+        return fail("gl: the context could not be made current")
+    }
+    glpSwapBuffers = glxSym(GLX_LIB, "glXSwapBuffers")?
+    return GL{hwnd: xwin, dc: dpy, rc: ctx}
+}
+
+var glpSwapBuffers = 0
+
 // Shows the frame drawn since the last swap.
 pub fn glSwap(g: GL) {
-    SwapBuffers(g.dc)
+    if os.name() == "windows" {
+        SwapBuffers(g.dc)
+    } else {
+        mem.call(glpSwapBuffers, g.dc, g.hwnd)
+    }
 }
 
 // Wait for the display before each swap (true) or swap at once (false).
@@ -299,13 +401,26 @@ pub fn glVsync(on: bool) -> bool {
     }
     let n = 0
     if on { n = 1 }
-    return (mem.call(glpSwapInterval, n) & 0xFFFFFFFF) != 0
+    // wglSwapIntervalEXT answers TRUE on success; glXSwapIntervalMESA
+    // answers 0. Both take the interval alone.
+    let r = mem.call(glpSwapInterval, n) & 0xFFFFFFFF
+    if os.name() == "windows" {
+        return r != 0
+    }
+    return r == 0
 }
 
 pub fn glClose(g: GL) {
-    wglMakeCurrent(0, 0)
-    wglDeleteContext(g.rc)
-    ReleaseDC(g.hwnd, g.dc)
+    if os.name() == "windows" {
+        wglMakeCurrent(0, 0)
+        wglDeleteContext(g.rc)
+        ReleaseDC(g.hwnd, g.dc)
+        return
+    }
+    let make = mem.symbol(GLX_LIB, "glXMakeCurrent")
+    let destroy = mem.symbol(GLX_LIB, "glXDestroyContext")
+    if make != 0 { mem.call(make, g.dc, 0, 0) }
+    if destroy != 0 { mem.call(destroy, g.dc, g.rc) }
 }
 
 // glGetString as a str, or "" when the driver has nothing for name.
@@ -384,10 +499,14 @@ var glpDrawElementsInstanced = 0
 var glpVertexAttribDivisor = 0
 var glpSwapInterval = 0
 
-// One function's address, or 0. wglGetProcAddress answers 1, 2, 3 or
-// -1 instead of 0 on some drivers when it has nothing, and never
-// answers for the 1.1 functions, which opengl32.dll exports itself.
+// One function's address, or 0. On Windows wglGetProcAddress answers 1,
+// 2, 3 or -1 instead of 0 on some drivers when it has nothing, and never
+// answers for the 1.1 functions, which opengl32.dll exports itself. On
+// Linux libGL exports every function.
 fn glProc(name: str) -> int {
+    if os.name() != "windows" {
+        return mem.symbol(GLX_LIB, name)
+    }
     let p = wglGetProcAddress(name)
     if p == 0 || p == 1 || p == 2 || p == 3 || p == -1 {
         return mem.symbol("opengl32.dll", name)
@@ -396,7 +515,7 @@ fn glProc(name: str) -> int {
 }
 
 // Fills every glp var. Returns the first function the driver did not
-// have, or "" when it had them all. wglSwapIntervalEXT is optional.
+// have, or "" when it had them all. The swap interval call is optional.
 fn glLoad() -> str {
     glpCreateShader = glProc("glCreateShader")
     if glpCreateShader == 0 { return "glCreateShader" }
@@ -492,7 +611,11 @@ fn glLoad() -> str {
     if glpDrawElementsInstanced == 0 { return "glDrawElementsInstanced" }
     glpVertexAttribDivisor = glProc("glVertexAttribDivisor")
     if glpVertexAttribDivisor == 0 { return "glVertexAttribDivisor" }
-    glpSwapInterval = glProc("wglSwapIntervalEXT")
+    if os.name() == "windows" {
+        glpSwapInterval = glProc("wglSwapIntervalEXT")
+    } else {
+        glpSwapInterval = glProc("glXSwapIntervalMESA")
+    }
     return ""
 }
 
@@ -886,7 +1009,7 @@ pub fn glFramebufferRenderbuffer(target: int, attachment: int, rbTarget: int,
 // ---- reading back ----
 
 // The pixel at (x, y), counted from the bottom left as OpenGL does, as
-// 0x00RRGGBB - the same word win.rgb makes.
+// 0x00RRGGBB - the order win.pixels uses, not win.rgb's 0x00BBGGRR.
 pub fn glReadPixel(x: int, y: int) -> int {
     let b = new [1]u32
     glPixelStorei(GL_PACK_ALIGNMENT, 4)
