@@ -46,7 +46,8 @@
 //
 // Textures, uniform buffers and push constants are there, and a
 // resizable window (win.resizable) rebuilds the swapchain by itself.
-// Not done yet: index buffers, compute, and validation layers.
+// Index buffers too (vkIndices, vkDrawIndexed). Not done yet: compute
+// and validation layers.
 
 // ---- structures, laid out as vulkan_core.h has them ----
 
@@ -721,6 +722,9 @@ pub extern fn vkCmdBindVertexBuffers(cmd: ptr, first: int, count: int, buffers: 
     offsets: ptr) from "vulkan-1"
 pub extern fn vkCmdPushConstants(cmd: ptr, layout: ptr, stages: int, offset: int, size: int,
     data: ptr) from "vulkan-1"
+pub extern fn vkCmdBindIndexBuffer(cmd: ptr, buffer: ptr, offset: int, kind: int) from "vulkan-1"
+pub extern fn vkCmdDrawIndexed(cmd: ptr, indices: int, instances: int, firstIndex: int,
+    vertexOffset: int, firstInstance: int) from "vulkan-1"
 pub extern fn vkCmdDraw(cmd: ptr, vertices: int, instances: int, firstVertex: int,
     firstInstance: int) from "vulkan-1"
 pub extern fn vkCmdPipelineBarrier(cmd: ptr, srcStage: int, dstStage: int, deps: int,
@@ -1698,6 +1702,22 @@ pub fn vkVertices(v: VK, xs: []float) -> VKBuffer! {
     return b
 }
 
+// An index buffer holding xs as 32-bit unsigned ints, for vkDrawIndexed:
+// each index picks a vertex, so a corner shared by several triangles is
+// stored once.
+pub fn vkIndices(v: VK, xs: []int) -> VKBuffer! {
+    let n = len(xs)
+    let b = vkMakeBuffer(v, n * 4 + 4, 0x40)? // INDEX_BUFFER
+    let p = 0
+    vkMapMemory(v.device, b.memory, 0, b.size, 0, &p)
+    let dst = p as *u32
+    for i in 0..n {
+        dst[i] = u32(xs[i])
+    }
+    vkUnmapMemory(v.device, b.memory)
+    return b
+}
+
 // Replaces a buffer's contents from the start. Wait for the frames that
 // use it first (vkWait) when it is being drawn from.
 pub fn vkWriteFloats(v: VK, b: VKBuffer, xs: []float) {
@@ -2121,6 +2141,18 @@ pub fn vkDraw(v: VK, b: VKBuffer, count: int) {
     let offs = new [1]u64
     vkCmdBindVertexBuffers(v.cmd, 0, 1, bufs, offs)
     vkCmdDraw(v.cmd, count, 1, 0, 0)
+    delete(bufs)
+    delete(offs)
+}
+
+// Draws `count` indices from indices, each naming a vertex in vertices.
+pub fn vkDrawIndexed(v: VK, vertices: VKBuffer, indices: VKBuffer, count: int) {
+    let bufs = new [1]ptr
+    bufs[0] = vertices.buffer
+    let offs = new [1]u64
+    vkCmdBindVertexBuffers(v.cmd, 0, 1, bufs, offs)
+    vkCmdBindIndexBuffer(v.cmd, indices.buffer, 0, 1) // UINT32
+    vkCmdDrawIndexed(v.cmd, count, 1, 0, 0, 0)
     delete(bufs)
     delete(offs)
 }
