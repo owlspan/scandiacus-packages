@@ -13,6 +13,7 @@ it.
 | Package | What it is |
 | --- | --- |
 | [`dotenv`](dotenv/) | `.env` files, with quoting and typed reads |
+| [`gl`](gl/) | OpenGL on a `win` window: context, shaders, buffers, textures, matrices |
 | [`ini`](ini/) | Config files: `[sections]`, `key = value`, comments |
 | [`jwt`](jwt/) | JSON Web Tokens, HS256, signing and verifying |
 | [`querybuilder`](querybuilder/) | Building SQL without pasting values into it |

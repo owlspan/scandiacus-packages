@@ -5,6 +5,7 @@
 # package is native is read from its own veyl.pkg rather than marked
 # here, so this list cannot drift out of step with reality.
 dotenv
+gl
 ini
 jwt
 querybuilder

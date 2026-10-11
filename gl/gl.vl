@@ -1,0 +1,1036 @@
+// gl - OpenGL on a win window.
+//
+//     veyl get gl
+//
+//     import "gl"
+//
+//     let w = must(win.open("cube", 800, 600))
+//     let g = must(glOpen(w))
+//     while win.poll(w) {
+//         glClearColor(0.1, 0.1, 0.15, 1.0)
+//         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+//         ...
+//         glSwap(g)
+//     }
+//     glClose(g)
+//
+// The window is an ordinary win window, so win.poll, win.pressed,
+// win.mouseX and the rest of the input functions keep working. What
+// changes is the drawing: win.present is not called, glSwap shows the
+// frame instead, and the win.* drawing functions are not used on a
+// window with a context.
+//
+// glOpen asks for a context the old way, through wglCreateContext,
+// which every Windows driver answers with the newest compatibility
+// profile it has - OpenGL 4.6 on current AMD, NVIDIA and Intel drivers.
+// So shaders, buffers, vertex arrays and framebuffers are all there,
+// and so are the old fixed-function calls. glVersion() says what was
+// given.
+//
+// Needs Veyl 0.66.0 or newer, for win.handle. Windows only for now; on
+// Linux and macOS glOpen fails rather than guessing.
+//
+// The OpenGL 1.1 calls are the real functions, declared with extern, so
+// their float parameters are C floats: a literal passes as it is, a
+// float variable needs f32(x), as in glClearColor(f32(r), 0.0, 0.0, 1.0).
+// Everything built on mem.call below takes plain int and float.
+//
+// How the calls get made. opengl32.dll exports only OpenGL 1.1; every
+// later function is a pointer the driver hands out once a context is
+// current. The 1.1 calls are declared with extern below. The rest are
+// looked up by glOpen into the vars further down and called through
+// mem.call. mem.call passes a float as a double, which is wrong for a
+// GLfloat parameter, so the float-taking calls go through their
+// pointer forms (glUniform1f is glUniform1fv on a one-float buffer).
+//
+// The function pointers live in globals, so one program has one set.
+// They belong to the context that was current when glOpen ran; two
+// contexts on the same driver give the same pointers, which is what
+// every OpenGL loader relies on.
+
+// ---- Windows ----
+
+extern struct GLPixelFormat {
+    size: u16
+    version: u16
+    flags: u32
+    pixelType: u8
+    colorBits: u8
+    alphaBits: u8 at 18
+    depthBits: u8 at 23
+    stencilBits: u8 at 24
+    damageMask: u32 at 36
+}
+
+extern fn GetDC(hwnd: ptr) -> ptr from "user32"
+extern fn ReleaseDC(hwnd: ptr, dc: ptr) -> int from "user32"
+extern fn ChoosePixelFormat(dc: ptr, pfd: GLPixelFormat) -> int from "gdi32"
+extern fn SetPixelFormat(dc: ptr, format: int, pfd: GLPixelFormat) -> bool from "gdi32"
+extern fn SwapBuffers(dc: ptr) -> bool from "gdi32"
+extern fn wglCreateContext(dc: ptr) -> ptr from "opengl32"
+extern fn wglMakeCurrent(dc: ptr, rc: ptr) -> bool from "opengl32"
+extern fn wglDeleteContext(rc: ptr) -> bool from "opengl32"
+extern fn wglGetProcAddress(name: str) -> ptr from "opengl32"
+
+// ---- OpenGL 1.1, straight from opengl32.dll ----
+
+pub extern fn glClear(mask: int) from "opengl32"
+pub extern fn glClearColor(r: f32, g: f32, b: f32, a: f32) from "opengl32"
+pub extern fn glClearDepth(d: float) from "opengl32"
+pub extern fn glViewport(x: int, y: int, w: int, h: int) from "opengl32"
+pub extern fn glScissor(x: int, y: int, w: int, h: int) from "opengl32"
+pub extern fn glEnable(cap: int) from "opengl32"
+pub extern fn glDisable(cap: int) from "opengl32"
+pub extern fn glDepthFunc(test: int) from "opengl32"
+pub extern fn glDepthMask(on: bool) from "opengl32"
+pub extern fn glBlendFunc(src: int, dst: int) from "opengl32"
+pub extern fn glCullFace(mode: int) from "opengl32"
+pub extern fn glFrontFace(mode: int) from "opengl32"
+pub extern fn glPolygonMode(face: int, mode: int) from "opengl32"
+pub extern fn glLineWidth(w: f32) from "opengl32"
+pub extern fn glPointSize(s: f32) from "opengl32"
+pub extern fn glDrawArrays(mode: int, first: int, count: int) from "opengl32"
+pub extern fn glDrawElements(mode: int, count: int, kind: int, offset: ptr) from "opengl32"
+pub extern fn glGetError() -> int from "opengl32"
+pub extern fn glGetIntegerv(name: int, out: *i32) from "opengl32"
+pub extern fn glFlush() from "opengl32"
+pub extern fn glFinish() from "opengl32"
+pub extern fn glGenTextures(n: int, out: *u32) from "opengl32"
+pub extern fn glDeleteTextures(n: int, ids: *u32) from "opengl32"
+pub extern fn glBindTexture(target: int, id: int) from "opengl32"
+pub extern fn glTexParameteri(target: int, name: int, value: int) from "opengl32"
+pub extern fn glTexImage2D(target: int, level: int, internal: int, w: int, h: int,
+    border: int, format: int, kind: int, data: ptr) from "opengl32"
+pub extern fn glTexSubImage2D(target: int, level: int, x: int, y: int, w: int, h: int,
+    format: int, kind: int, data: ptr) from "opengl32"
+pub extern fn glPixelStorei(name: int, value: int) from "opengl32"
+pub extern fn glReadPixels(x: int, y: int, w: int, h: int, format: int, kind: int,
+    out: ptr) from "opengl32"
+pub extern fn glGetString(name: int) -> ptr from "opengl32"
+
+// ---- constants ----
+
+pub const GL_DEPTH_BUFFER_BIT = 0x00000100
+pub const GL_STENCIL_BUFFER_BIT = 0x00000400
+pub const GL_COLOR_BUFFER_BIT = 0x00004000
+
+pub const GL_POINTS = 0x0000
+pub const GL_LINES = 0x0001
+pub const GL_LINE_LOOP = 0x0002
+pub const GL_LINE_STRIP = 0x0003
+pub const GL_TRIANGLES = 0x0004
+pub const GL_TRIANGLE_STRIP = 0x0005
+pub const GL_TRIANGLE_FAN = 0x0006
+
+pub const GL_NEVER = 0x0200
+pub const GL_LESS = 0x0201
+pub const GL_EQUAL = 0x0202
+pub const GL_LEQUAL = 0x0203
+pub const GL_GREATER = 0x0204
+pub const GL_NOTEQUAL = 0x0205
+pub const GL_GEQUAL = 0x0206
+pub const GL_ALWAYS = 0x0207
+
+pub const GL_ZERO = 0
+pub const GL_ONE = 1
+pub const GL_SRC_COLOR = 0x0300
+pub const GL_ONE_MINUS_SRC_COLOR = 0x0301
+pub const GL_SRC_ALPHA = 0x0302
+pub const GL_ONE_MINUS_SRC_ALPHA = 0x0303
+pub const GL_DST_ALPHA = 0x0304
+pub const GL_ONE_MINUS_DST_ALPHA = 0x0305
+
+pub const GL_FRONT = 0x0404
+pub const GL_BACK = 0x0405
+pub const GL_FRONT_AND_BACK = 0x0408
+pub const GL_CW = 0x0900
+pub const GL_CCW = 0x0901
+pub const GL_POINT = 0x1B00
+pub const GL_LINE = 0x1B01
+pub const GL_FILL = 0x1B02
+
+pub const GL_CULL_FACE = 0x0B44
+pub const GL_DEPTH_TEST = 0x0B71
+pub const GL_BLEND = 0x0BE2
+pub const GL_SCISSOR_TEST = 0x0C11
+pub const GL_MULTISAMPLE = 0x809D
+pub const GL_PROGRAM_POINT_SIZE = 0x8642
+
+pub const GL_NO_ERROR = 0
+pub const GL_INVALID_ENUM = 0x0500
+pub const GL_INVALID_VALUE = 0x0501
+pub const GL_INVALID_OPERATION = 0x0502
+pub const GL_OUT_OF_MEMORY = 0x0505
+pub const GL_INVALID_FRAMEBUFFER_OPERATION = 0x0506
+
+pub const GL_BYTE = 0x1400
+pub const GL_UNSIGNED_BYTE = 0x1401
+pub const GL_SHORT = 0x1402
+pub const GL_UNSIGNED_SHORT = 0x1403
+pub const GL_INT = 0x1404
+pub const GL_UNSIGNED_INT = 0x1405
+pub const GL_FLOAT = 0x1406
+
+pub const GL_RED = 0x1903
+pub const GL_RGB = 0x1907
+pub const GL_RGBA = 0x1908
+pub const GL_BGRA = 0x80E1
+pub const GL_RGB8 = 0x8051
+pub const GL_RGBA8 = 0x8058
+pub const GL_DEPTH_COMPONENT = 0x1902
+pub const GL_DEPTH_COMPONENT24 = 0x81A6
+pub const GL_DEPTH24_STENCIL8 = 0x88F0
+
+pub const GL_TEXTURE_2D = 0x0DE1
+pub const GL_TEXTURE_MAG_FILTER = 0x2800
+pub const GL_TEXTURE_MIN_FILTER = 0x2801
+pub const GL_TEXTURE_WRAP_S = 0x2802
+pub const GL_TEXTURE_WRAP_T = 0x2803
+pub const GL_NEAREST = 0x2600
+pub const GL_LINEAR = 0x2601
+pub const GL_LINEAR_MIPMAP_LINEAR = 0x2703
+pub const GL_REPEAT = 0x2901
+pub const GL_CLAMP_TO_EDGE = 0x812F
+pub const GL_TEXTURE0 = 0x84C0
+pub const GL_UNPACK_ALIGNMENT = 0x0CF5
+pub const GL_PACK_ALIGNMENT = 0x0D05
+
+pub const GL_ARRAY_BUFFER = 0x8892
+pub const GL_ELEMENT_ARRAY_BUFFER = 0x8893
+pub const GL_UNIFORM_BUFFER = 0x8A11
+pub const GL_STREAM_DRAW = 0x88E0
+pub const GL_STATIC_DRAW = 0x88E4
+pub const GL_DYNAMIC_DRAW = 0x88E8
+
+pub const GL_FRAGMENT_SHADER = 0x8B30
+pub const GL_VERTEX_SHADER = 0x8B31
+pub const GL_GEOMETRY_SHADER = 0x8DD9
+pub const GL_COMPUTE_SHADER = 0x91B9
+pub const GL_COMPILE_STATUS = 0x8B81
+pub const GL_LINK_STATUS = 0x8B82
+pub const GL_INFO_LOG_LENGTH = 0x8B84
+
+pub const GL_FRAMEBUFFER = 0x8D40
+pub const GL_RENDERBUFFER = 0x8D41
+pub const GL_COLOR_ATTACHMENT0 = 0x8CE0
+pub const GL_DEPTH_ATTACHMENT = 0x8D00
+pub const GL_DEPTH_STENCIL_ATTACHMENT = 0x821A
+pub const GL_FRAMEBUFFER_COMPLETE = 0x8CD5
+
+pub const GL_VENDOR = 0x1F00
+pub const GL_RENDERER = 0x1F01
+pub const GL_VERSION = 0x1F02
+pub const GL_SHADING_LANGUAGE_VERSION = 0x8B8C
+pub const GL_VIEWPORT = 0x0BA2
+
+// ---- the context ----
+
+pub struct GL {
+    hwnd: int
+    dc: int
+    rc: int
+}
+
+// Pixel format flags and type, from wingdi.h.
+const PFD_DRAW_TO_WINDOW = 0x04
+const PFD_SUPPORT_OPENGL = 0x20
+const PFD_DOUBLEBUFFER = 0x01
+
+// Gives the window a 32-bit color, 24-bit depth, 8-bit stencil
+// double-buffered format, makes a context on it current, and loads the
+// functions past OpenGL 1.1. Fails, naming what was missing, rather
+// than handing back a context the first draw would crash on.
+pub fn glOpen(w: int) -> GL! {
+    if os.name() != "windows" {
+        return fail("gl: only Windows is supported so far")
+    }
+    let hwnd = win.handle(w)
+    let dc = GetDC(hwnd)
+    if dc == 0 {
+        return fail("gl: the window has no device context")
+    }
+
+    let pfd = GLPixelFormat{}
+    pfd.size = 40
+    pfd.version = 1
+    pfd.flags = u32(PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER)
+    pfd.colorBits = 32
+    pfd.alphaBits = 8
+    pfd.depthBits = 24
+    pfd.stencilBits = 8
+    let format = ChoosePixelFormat(dc, pfd)
+    if format == 0 {
+        return fail("gl: no pixel format with OpenGL on this display")
+    }
+    if !SetPixelFormat(dc, format, pfd) {
+        return fail("gl: the window refused the pixel format")
+    }
+
+    let rc = wglCreateContext(dc)
+    if rc == 0 {
+        return fail("gl: the driver would not make a context")
+    }
+    if !wglMakeCurrent(dc, rc) {
+        wglDeleteContext(rc)
+        return fail("gl: the context could not be made current")
+    }
+
+    let missing = glLoad()
+    if missing != "" {
+        wglMakeCurrent(0, 0)
+        wglDeleteContext(rc)
+        return fail("gl: the driver has no {missing} - OpenGL 3.3 or newer is needed")
+    }
+    glViewport(0, 0, win.width(w), win.height(w))
+    return GL{hwnd: hwnd, dc: dc, rc: rc}
+}
+
+// Shows the frame drawn since the last swap.
+pub fn glSwap(g: GL) {
+    SwapBuffers(g.dc)
+}
+
+// Wait for the display before each swap (true) or swap at once (false).
+// Off by default on most drivers; on, a loop runs at the refresh rate
+// with no sleep. Returns false when the driver has no way to change it.
+pub fn glVsync(on: bool) -> bool {
+    if glpSwapInterval == 0 {
+        return false
+    }
+    let n = 0
+    if on { n = 1 }
+    return (mem.call(glpSwapInterval, n) & 0xFFFFFFFF) != 0
+}
+
+pub fn glClose(g: GL) {
+    wglMakeCurrent(0, 0)
+    wglDeleteContext(g.rc)
+    ReleaseDC(g.hwnd, g.dc)
+}
+
+// glGetString as a str, or "" when the driver has nothing for name.
+pub fn glText(name: int) -> str {
+    let p = glGetString(name)
+    if p == 0 { return "" }
+    return mem.str(p)
+}
+
+// "4.6.14802 Compatibility Profile Context 22.20.27.09", or similar.
+pub fn glVersion() -> str {
+    return glText(GL_VERSION)
+}
+
+// The pending error as a word, or "" when there is none. Reading it
+// clears it, as glGetError does.
+pub fn glErrorText() -> str {
+    let e = glGetError()
+    if e == GL_NO_ERROR { return "" }
+    if e == GL_INVALID_ENUM { return "invalid enum" }
+    if e == GL_INVALID_VALUE { return "invalid value" }
+    if e == GL_INVALID_OPERATION { return "invalid operation" }
+    if e == GL_OUT_OF_MEMORY { return "out of memory" }
+    if e == GL_INVALID_FRAMEBUFFER_OPERATION { return "invalid framebuffer operation" }
+    return "error {e}"
+}
+
+// ---- the loader ----
+
+var glpCreateShader = 0
+var glpShaderSource = 0
+var glpCompileShader = 0
+var glpGetShaderiv = 0
+var glpGetShaderInfoLog = 0
+var glpDeleteShader = 0
+var glpCreateProgram = 0
+var glpAttachShader = 0
+var glpLinkProgram = 0
+var glpGetProgramiv = 0
+var glpGetProgramInfoLog = 0
+var glpUseProgram = 0
+var glpDeleteProgram = 0
+var glpGetUniformLocation = 0
+var glpGetAttribLocation = 0
+var glpUniform1i = 0
+var glpUniform1fv = 0
+var glpUniform2fv = 0
+var glpUniform3fv = 0
+var glpUniform4fv = 0
+var glpUniformMatrix4fv = 0
+var glpGenBuffers = 0
+var glpBindBuffer = 0
+var glpBufferData = 0
+var glpBufferSubData = 0
+var glpDeleteBuffers = 0
+var glpGenVertexArrays = 0
+var glpBindVertexArray = 0
+var glpDeleteVertexArrays = 0
+var glpVertexAttribPointer = 0
+var glpEnableVertexAttribArray = 0
+var glpDisableVertexAttribArray = 0
+var glpActiveTexture = 0
+var glpGenerateMipmap = 0
+var glpGenFramebuffers = 0
+var glpBindFramebuffer = 0
+var glpFramebufferTexture2D = 0
+var glpCheckFramebufferStatus = 0
+var glpDeleteFramebuffers = 0
+var glpGenRenderbuffers = 0
+var glpBindRenderbuffer = 0
+var glpRenderbufferStorage = 0
+var glpFramebufferRenderbuffer = 0
+var glpDeleteRenderbuffers = 0
+var glpDrawArraysInstanced = 0
+var glpDrawElementsInstanced = 0
+var glpVertexAttribDivisor = 0
+var glpSwapInterval = 0
+
+// One function's address, or 0. wglGetProcAddress answers 1, 2, 3 or
+// -1 instead of 0 on some drivers when it has nothing, and never
+// answers for the 1.1 functions, which opengl32.dll exports itself.
+fn glProc(name: str) -> int {
+    let p = wglGetProcAddress(name)
+    if p == 0 || p == 1 || p == 2 || p == 3 || p == -1 {
+        return mem.symbol("opengl32.dll", name)
+    }
+    return p
+}
+
+// Fills every glp var. Returns the first function the driver did not
+// have, or "" when it had them all. wglSwapIntervalEXT is optional.
+fn glLoad() -> str {
+    glpCreateShader = glProc("glCreateShader")
+    if glpCreateShader == 0 { return "glCreateShader" }
+    glpShaderSource = glProc("glShaderSource")
+    if glpShaderSource == 0 { return "glShaderSource" }
+    glpCompileShader = glProc("glCompileShader")
+    if glpCompileShader == 0 { return "glCompileShader" }
+    glpGetShaderiv = glProc("glGetShaderiv")
+    if glpGetShaderiv == 0 { return "glGetShaderiv" }
+    glpGetShaderInfoLog = glProc("glGetShaderInfoLog")
+    if glpGetShaderInfoLog == 0 { return "glGetShaderInfoLog" }
+    glpDeleteShader = glProc("glDeleteShader")
+    if glpDeleteShader == 0 { return "glDeleteShader" }
+    glpCreateProgram = glProc("glCreateProgram")
+    if glpCreateProgram == 0 { return "glCreateProgram" }
+    glpAttachShader = glProc("glAttachShader")
+    if glpAttachShader == 0 { return "glAttachShader" }
+    glpLinkProgram = glProc("glLinkProgram")
+    if glpLinkProgram == 0 { return "glLinkProgram" }
+    glpGetProgramiv = glProc("glGetProgramiv")
+    if glpGetProgramiv == 0 { return "glGetProgramiv" }
+    glpGetProgramInfoLog = glProc("glGetProgramInfoLog")
+    if glpGetProgramInfoLog == 0 { return "glGetProgramInfoLog" }
+    glpUseProgram = glProc("glUseProgram")
+    if glpUseProgram == 0 { return "glUseProgram" }
+    glpDeleteProgram = glProc("glDeleteProgram")
+    if glpDeleteProgram == 0 { return "glDeleteProgram" }
+    glpGetUniformLocation = glProc("glGetUniformLocation")
+    if glpGetUniformLocation == 0 { return "glGetUniformLocation" }
+    glpGetAttribLocation = glProc("glGetAttribLocation")
+    if glpGetAttribLocation == 0 { return "glGetAttribLocation" }
+    glpUniform1i = glProc("glUniform1i")
+    if glpUniform1i == 0 { return "glUniform1i" }
+    glpUniform1fv = glProc("glUniform1fv")
+    if glpUniform1fv == 0 { return "glUniform1fv" }
+    glpUniform2fv = glProc("glUniform2fv")
+    if glpUniform2fv == 0 { return "glUniform2fv" }
+    glpUniform3fv = glProc("glUniform3fv")
+    if glpUniform3fv == 0 { return "glUniform3fv" }
+    glpUniform4fv = glProc("glUniform4fv")
+    if glpUniform4fv == 0 { return "glUniform4fv" }
+    glpUniformMatrix4fv = glProc("glUniformMatrix4fv")
+    if glpUniformMatrix4fv == 0 { return "glUniformMatrix4fv" }
+    glpGenBuffers = glProc("glGenBuffers")
+    if glpGenBuffers == 0 { return "glGenBuffers" }
+    glpBindBuffer = glProc("glBindBuffer")
+    if glpBindBuffer == 0 { return "glBindBuffer" }
+    glpBufferData = glProc("glBufferData")
+    if glpBufferData == 0 { return "glBufferData" }
+    glpBufferSubData = glProc("glBufferSubData")
+    if glpBufferSubData == 0 { return "glBufferSubData" }
+    glpDeleteBuffers = glProc("glDeleteBuffers")
+    if glpDeleteBuffers == 0 { return "glDeleteBuffers" }
+    glpGenVertexArrays = glProc("glGenVertexArrays")
+    if glpGenVertexArrays == 0 { return "glGenVertexArrays" }
+    glpBindVertexArray = glProc("glBindVertexArray")
+    if glpBindVertexArray == 0 { return "glBindVertexArray" }
+    glpDeleteVertexArrays = glProc("glDeleteVertexArrays")
+    if glpDeleteVertexArrays == 0 { return "glDeleteVertexArrays" }
+    glpVertexAttribPointer = glProc("glVertexAttribPointer")
+    if glpVertexAttribPointer == 0 { return "glVertexAttribPointer" }
+    glpEnableVertexAttribArray = glProc("glEnableVertexAttribArray")
+    if glpEnableVertexAttribArray == 0 { return "glEnableVertexAttribArray" }
+    glpDisableVertexAttribArray = glProc("glDisableVertexAttribArray")
+    if glpDisableVertexAttribArray == 0 { return "glDisableVertexAttribArray" }
+    glpActiveTexture = glProc("glActiveTexture")
+    if glpActiveTexture == 0 { return "glActiveTexture" }
+    glpGenerateMipmap = glProc("glGenerateMipmap")
+    if glpGenerateMipmap == 0 { return "glGenerateMipmap" }
+    glpGenFramebuffers = glProc("glGenFramebuffers")
+    if glpGenFramebuffers == 0 { return "glGenFramebuffers" }
+    glpBindFramebuffer = glProc("glBindFramebuffer")
+    if glpBindFramebuffer == 0 { return "glBindFramebuffer" }
+    glpFramebufferTexture2D = glProc("glFramebufferTexture2D")
+    if glpFramebufferTexture2D == 0 { return "glFramebufferTexture2D" }
+    glpCheckFramebufferStatus = glProc("glCheckFramebufferStatus")
+    if glpCheckFramebufferStatus == 0 { return "glCheckFramebufferStatus" }
+    glpDeleteFramebuffers = glProc("glDeleteFramebuffers")
+    if glpDeleteFramebuffers == 0 { return "glDeleteFramebuffers" }
+    glpGenRenderbuffers = glProc("glGenRenderbuffers")
+    if glpGenRenderbuffers == 0 { return "glGenRenderbuffers" }
+    glpBindRenderbuffer = glProc("glBindRenderbuffer")
+    if glpBindRenderbuffer == 0 { return "glBindRenderbuffer" }
+    glpRenderbufferStorage = glProc("glRenderbufferStorage")
+    if glpRenderbufferStorage == 0 { return "glRenderbufferStorage" }
+    glpFramebufferRenderbuffer = glProc("glFramebufferRenderbuffer")
+    if glpFramebufferRenderbuffer == 0 { return "glFramebufferRenderbuffer" }
+    glpDeleteRenderbuffers = glProc("glDeleteRenderbuffers")
+    if glpDeleteRenderbuffers == 0 { return "glDeleteRenderbuffers" }
+    glpDrawArraysInstanced = glProc("glDrawArraysInstanced")
+    if glpDrawArraysInstanced == 0 { return "glDrawArraysInstanced" }
+    glpDrawElementsInstanced = glProc("glDrawElementsInstanced")
+    if glpDrawElementsInstanced == 0 { return "glDrawElementsInstanced" }
+    glpVertexAttribDivisor = glProc("glVertexAttribDivisor")
+    if glpVertexAttribDivisor == 0 { return "glVertexAttribDivisor" }
+    glpSwapInterval = glProc("wglSwapIntervalEXT")
+    return ""
+}
+
+// A GLuint result: the low 32 bits, since the top half of rax is
+// whatever the driver left there.
+fn glU32(v: int) -> int {
+    return v & 0xFFFFFFFF
+}
+
+// A GLint result, sign-extended, for the calls that answer -1.
+fn glI32(v: int) -> int {
+    let r = v & 0xFFFFFFFF
+    if r >= 0x80000000 { r = r - 0x100000000 }
+    return r
+}
+
+// ---- shaders ----
+
+pub fn glCreateShader(kind: int) -> int {
+    return glU32(mem.call(glpCreateShader, kind))
+}
+
+pub fn glShaderSource(shader: int, src: str) {
+    // const GLchar** with one entry, and no lengths: the text is read
+    // to its NUL.
+    let list = new ptr
+    *list = mem.addr(src)
+    mem.call(glpShaderSource, shader, 1, list, 0)
+    delete(list)
+}
+
+pub fn glCompileShader(shader: int) {
+    mem.call(glpCompileShader, shader)
+}
+
+pub fn glGetShaderiv(shader: int, name: int) -> int {
+    let out: i32 = 0
+    mem.call(glpGetShaderiv, shader, name, &out)
+    return int(out)
+}
+
+pub fn glGetShaderInfoLog(shader: int) -> str {
+    let n = glGetShaderiv(shader, GL_INFO_LOG_LENGTH)
+    if n <= 0 { return "" }
+    let buf = mem.alloc(n + 1)
+    mem.call(glpGetShaderInfoLog, shader, n + 1, 0, buf)
+    let s = mem.str(buf)
+    mem.free(buf)
+    return s
+}
+
+pub fn glDeleteShader(shader: int) {
+    mem.call(glpDeleteShader, shader)
+}
+
+pub fn glCreateProgram() -> int {
+    return glU32(mem.call(glpCreateProgram))
+}
+
+pub fn glAttachShader(program: int, shader: int) {
+    mem.call(glpAttachShader, program, shader)
+}
+
+pub fn glLinkProgram(program: int) {
+    mem.call(glpLinkProgram, program)
+}
+
+pub fn glGetProgramiv(program: int, name: int) -> int {
+    let out: i32 = 0
+    mem.call(glpGetProgramiv, program, name, &out)
+    return int(out)
+}
+
+pub fn glGetProgramInfoLog(program: int) -> str {
+    let n = glGetProgramiv(program, GL_INFO_LOG_LENGTH)
+    if n <= 0 { return "" }
+    let buf = mem.alloc(n + 1)
+    mem.call(glpGetProgramInfoLog, program, n + 1, 0, buf)
+    let s = mem.str(buf)
+    mem.free(buf)
+    return s
+}
+
+pub fn glUseProgram(program: int) {
+    mem.call(glpUseProgram, program)
+}
+
+pub fn glDeleteProgram(program: int) {
+    mem.call(glpDeleteProgram, program)
+}
+
+// Compiles one stage, failing with the driver's own log.
+pub fn glShader(kind: int, src: str) -> int! {
+    let s = glCreateShader(kind)
+    if s == 0 {
+        return fail("gl: could not create a shader")
+    }
+    glShaderSource(s, src)
+    glCompileShader(s)
+    if glGetShaderiv(s, GL_COMPILE_STATUS) == 0 {
+        let log = glGetShaderInfoLog(s)
+        glDeleteShader(s)
+        let stage = "fragment"
+        if kind == GL_VERTEX_SHADER { stage = "vertex" }
+        return fail("gl: the {stage} shader did not compile:\n{log}")
+    }
+    return s
+}
+
+// A vertex and a fragment shader, compiled and linked into a program.
+pub fn glProgram(vertexSrc: str, fragmentSrc: str) -> int! {
+    let vs = glShader(GL_VERTEX_SHADER, vertexSrc)?
+    let fs = glShader(GL_FRAGMENT_SHADER, fragmentSrc)
+    if !isOk(fs) {
+        glDeleteShader(vs)
+    }
+    let f = fs?
+    let p = glCreateProgram()
+    glAttachShader(p, vs)
+    glAttachShader(p, f)
+    glLinkProgram(p)
+    // Linked programs keep their own copy; the shader objects can go.
+    glDeleteShader(vs)
+    glDeleteShader(f)
+    if glGetProgramiv(p, GL_LINK_STATUS) == 0 {
+        let log = glGetProgramInfoLog(p)
+        glDeleteProgram(p)
+        return fail("gl: the program did not link:\n{log}")
+    }
+    return p
+}
+
+// ---- uniforms ----
+
+pub fn glGetUniformLocation(program: int, name: str) -> int {
+    return glI32(mem.call(glpGetUniformLocation, program, name))
+}
+
+pub fn glGetAttribLocation(program: int, name: str) -> int {
+    return glI32(mem.call(glpGetAttribLocation, program, name))
+}
+
+pub fn glUniform1i(loc: int, v: int) {
+    mem.call(glpUniform1i, loc, v)
+}
+
+// The GLfloat ones go through a small buffer and the *fv call, because
+// mem.call can only pass a float as a double.
+pub fn glUniform1f(loc: int, x: float) {
+    let b = new [4]f32
+    b[0] = f32(x)
+    mem.call(glpUniform1fv, loc, 1, b)
+    delete(b)
+}
+
+pub fn glUniform2f(loc: int, x: float, y: float) {
+    let b = new [4]f32
+    b[0] = f32(x)
+    b[1] = f32(y)
+    mem.call(glpUniform2fv, loc, 1, b)
+    delete(b)
+}
+
+pub fn glUniform3f(loc: int, x: float, y: float, z: float) {
+    let b = new [4]f32
+    b[0] = f32(x)
+    b[1] = f32(y)
+    b[2] = f32(z)
+    mem.call(glpUniform3fv, loc, 1, b)
+    delete(b)
+}
+
+pub fn glUniform4f(loc: int, x: float, y: float, z: float, w: float) {
+    let b = new [4]f32
+    b[0] = f32(x)
+    b[1] = f32(y)
+    b[2] = f32(z)
+    b[3] = f32(w)
+    mem.call(glpUniform4fv, loc, 1, b)
+    delete(b)
+}
+
+// A 4x4 matrix as sixteen floats in column order, the order every glm*
+// function below makes and GLSL's mat4 reads.
+pub fn glUniformMat4(loc: int, m: []float) {
+    let b = new [16]f32
+    for i in 0..16 {
+        b[i] = f32(m[i])
+    }
+    mem.call(glpUniformMatrix4fv, loc, 1, 0, b)
+    delete(b)
+}
+
+// ---- buffers and vertex arrays ----
+
+pub fn glGenBuffer() -> int {
+    let id: u32 = 0
+    mem.call(glpGenBuffers, 1, &id)
+    return int(id)
+}
+
+pub fn glDeleteBuffer(id: int) {
+    let v = u32(id)
+    mem.call(glpDeleteBuffers, 1, &v)
+}
+
+pub fn glBindBuffer(target: int, id: int) {
+    mem.call(glpBindBuffer, target, id)
+}
+
+// Raw bytes from an address, for data already laid out in memory.
+pub fn glBufferData(target: int, size: int, data: int, usage: int) {
+    mem.call(glpBufferData, target, size, data, usage)
+}
+
+pub fn glBufferSubData(target: int, offset: int, size: int, data: int) {
+    mem.call(glpBufferSubData, target, offset, size, data)
+}
+
+// Uploads a list of floats as GLfloats into the buffer bound to target.
+pub fn glBufferFloats(target: int, xs: []float, usage: int) {
+    let n = len(xs)
+    let b = new [n + 1]f32
+    for i in 0..n {
+        b[i] = f32(xs[i])
+    }
+    mem.call(glpBufferData, target, n * 4, b, usage)
+    delete(b)
+}
+
+// Uploads a list of ints as GLuints, the usual index buffer.
+pub fn glBufferIndices(target: int, xs: []int, usage: int) {
+    let n = len(xs)
+    let b = new [n + 1]u32
+    for i in 0..n {
+        b[i] = u32(xs[i])
+    }
+    mem.call(glpBufferData, target, n * 4, b, usage)
+    delete(b)
+}
+
+pub fn glGenVertexArray() -> int {
+    let id: u32 = 0
+    mem.call(glpGenVertexArrays, 1, &id)
+    return int(id)
+}
+
+pub fn glDeleteVertexArray(id: int) {
+    let v = u32(id)
+    mem.call(glpDeleteVertexArrays, 1, &v)
+}
+
+pub fn glBindVertexArray(id: int) {
+    mem.call(glpBindVertexArray, id)
+}
+
+// Attribute `index` reads `size` floats per vertex, `stride` bytes
+// apart, starting `offset` bytes into the bound GL_ARRAY_BUFFER.
+pub fn glVertexAttribPointer(index: int, size: int, kind: int, normalized: bool,
+    stride: int, offset: int) {
+    let n = 0
+    if normalized { n = 1 }
+    mem.call(glpVertexAttribPointer, index, size, kind, n, stride, offset)
+}
+
+// The common case: floats, not normalized, `stride` and `offset`
+// counted in floats rather than bytes.
+pub fn glAttribFloats(index: int, size: int, stride: int, offset: int) {
+    mem.call(glpVertexAttribPointer, index, size, GL_FLOAT, 0, stride * 4, offset * 4)
+    mem.call(glpEnableVertexAttribArray, index)
+}
+
+pub fn glEnableVertexAttribArray(index: int) {
+    mem.call(glpEnableVertexAttribArray, index)
+}
+
+pub fn glDisableVertexAttribArray(index: int) {
+    mem.call(glpDisableVertexAttribArray, index)
+}
+
+pub fn glVertexAttribDivisor(index: int, divisor: int) {
+    mem.call(glpVertexAttribDivisor, index, divisor)
+}
+
+pub fn glDrawArraysInstanced(mode: int, first: int, count: int, instances: int) {
+    mem.call(glpDrawArraysInstanced, mode, first, count, instances)
+}
+
+pub fn glDrawElementsInstanced(mode: int, count: int, kind: int, offset: int,
+    instances: int) {
+    mem.call(glpDrawElementsInstanced, mode, count, kind, offset, instances)
+}
+
+// ---- textures ----
+
+pub fn glGenTexture() -> int {
+    let id: u32 = 0
+    glGenTextures(1, &id)
+    return int(id)
+}
+
+pub fn glDeleteTexture(id: int) {
+    let v = u32(id)
+    glDeleteTextures(1, &v)
+}
+
+pub fn glActiveTexture(unit: int) {
+    mem.call(glpActiveTexture, unit)
+}
+
+pub fn glGenerateMipmap(target: int) {
+    mem.call(glpGenerateMipmap, target)
+}
+
+// A texture from win.image pixels, or anything else laid out as
+// 0x00RRGGBB words top row first: what win.pixels and win.image give.
+// Uploaded as BGRA with alpha forced to 255, flipped so texture row 0
+// is the bottom row as OpenGL expects, then mipmapped.
+pub fn glTextureFromPixels(pixels: int, w: int, h: int) -> int {
+    let n = w * h
+    let b = new [n + 1]u32
+    for y in 0..h {
+        let src = pixels + (h - 1 - y) * w * 4
+        for x in 0..w {
+            b[y * w + x] = u32(mem.readU32(src + x * 4) | 0xFF000000)
+        }
+    }
+    let id = glGenTexture()
+    glBindTexture(GL_TEXTURE_2D, id)
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4)
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_BGRA, GL_UNSIGNED_BYTE, b)
+    delete(b)
+    glGenerateMipmap(GL_TEXTURE_2D)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT)
+    return id
+}
+
+// ---- framebuffers ----
+
+pub fn glGenFramebuffer() -> int {
+    let id: u32 = 0
+    mem.call(glpGenFramebuffers, 1, &id)
+    return int(id)
+}
+
+pub fn glDeleteFramebuffer(id: int) {
+    let v = u32(id)
+    mem.call(glpDeleteFramebuffers, 1, &v)
+}
+
+pub fn glBindFramebuffer(target: int, id: int) {
+    mem.call(glpBindFramebuffer, target, id)
+}
+
+pub fn glFramebufferTexture2D(target: int, attachment: int, texTarget: int,
+    tex: int, level: int) {
+    mem.call(glpFramebufferTexture2D, target, attachment, texTarget, tex, level)
+}
+
+pub fn glCheckFramebufferStatus(target: int) -> int {
+    return glU32(mem.call(glpCheckFramebufferStatus, target))
+}
+
+pub fn glGenRenderbuffer() -> int {
+    let id: u32 = 0
+    mem.call(glpGenRenderbuffers, 1, &id)
+    return int(id)
+}
+
+pub fn glDeleteRenderbuffer(id: int) {
+    let v = u32(id)
+    mem.call(glpDeleteRenderbuffers, 1, &v)
+}
+
+pub fn glBindRenderbuffer(target: int, id: int) {
+    mem.call(glpBindRenderbuffer, target, id)
+}
+
+pub fn glRenderbufferStorage(target: int, format: int, w: int, h: int) {
+    mem.call(glpRenderbufferStorage, target, format, w, h)
+}
+
+pub fn glFramebufferRenderbuffer(target: int, attachment: int, rbTarget: int,
+    rb: int) {
+    mem.call(glpFramebufferRenderbuffer, target, attachment, rbTarget, rb)
+}
+
+// ---- reading back ----
+
+// The pixel at (x, y), counted from the bottom left as OpenGL does, as
+// 0x00RRGGBB - the same word win.rgb makes.
+pub fn glReadPixel(x: int, y: int) -> int {
+    let b = new [1]u32
+    glPixelStorei(GL_PACK_ALIGNMENT, 4)
+    glReadPixels(x, y, 1, 1, GL_BGRA, GL_UNSIGNED_BYTE, b)
+    let v = int(b[0]) & 0x00FFFFFF
+    delete(b)
+    return v
+}
+
+// ---- matrices ----
+//
+// Sixteen floats in column order, so m[12], m[13], m[14] are the
+// translation. Right-handed, camera looking down -z, depth -1..1:
+// the conventions of the old gluPerspective and of GLM.
+
+pub fn glmIdentity() -> []float {
+    return [1.0, 0.0, 0.0, 0.0,
+        0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 1.0]
+}
+
+// a * b: b applied first, then a.
+pub fn glmMul(a: []float, b: []float) -> []float {
+    let out: []float = []
+    for col in 0..4 {
+        for row in 0..4 {
+            let s = 0.0
+            for k in 0..4 {
+                s = s + a[k * 4 + row] * b[col * 4 + k]
+            }
+            push(out, s)
+        }
+    }
+    return out
+}
+
+// fovY in radians.
+pub fn glmPerspective(fovY: float, aspect: float, near: float, far: float) -> []float {
+    let f = 1.0 / tan(fovY / 2.0)
+    let m = glmZero()
+    m[0] = f / aspect
+    m[5] = f
+    m[10] = (far + near) / (near - far)
+    m[11] = -1.0
+    m[14] = (2.0 * far * near) / (near - far)
+    return m
+}
+
+pub fn glmOrtho(left: float, right: float, bottom: float, top: float,
+    near: float, far: float) -> []float {
+    let m = glmIdentity()
+    m[0] = 2.0 / (right - left)
+    m[5] = 2.0 / (top - bottom)
+    m[10] = -2.0 / (far - near)
+    m[12] = -(right + left) / (right - left)
+    m[13] = -(top + bottom) / (top - bottom)
+    m[14] = -(far + near) / (far - near)
+    return m
+}
+
+pub fn glmTranslate(x: float, y: float, z: float) -> []float {
+    let m = glmIdentity()
+    m[12] = x
+    m[13] = y
+    m[14] = z
+    return m
+}
+
+pub fn glmScale(x: float, y: float, z: float) -> []float {
+    let m = glmIdentity()
+    m[0] = x
+    m[5] = y
+    m[10] = z
+    return m
+}
+
+// A rotation of `angle` radians around the axis (x, y, z), which need
+// not be unit length.
+pub fn glmRotate(angle: float, x: float, y: float, z: float) -> []float {
+    let l = sqrt(x * x + y * y + z * z)
+    if l == 0.0 { return glmIdentity() }
+    let ax = x / l
+    let ay = y / l
+    let az = z / l
+    let c = cos(angle)
+    let s = sin(angle)
+    let t = 1.0 - c
+    let m = glmIdentity()
+    m[0] = t * ax * ax + c
+    m[1] = t * ax * ay + s * az
+    m[2] = t * ax * az - s * ay
+    m[4] = t * ax * ay - s * az
+    m[5] = t * ay * ay + c
+    m[6] = t * ay * az + s * ax
+    m[8] = t * ax * az + s * ay
+    m[9] = t * ay * az - s * ax
+    m[10] = t * az * az + c
+    return m
+}
+
+// A camera at eye looking at center, with up roughly up.
+pub fn glmLookAt(ex: float, ey: float, ez: float, cx: float, cy: float, cz: float,
+    ux: float, uy: float, uz: float) -> []float {
+    // f = normalize(center - eye)
+    let fx = cx - ex
+    let fy = cy - ey
+    let fz = cz - ez
+    let fl = sqrt(fx * fx + fy * fy + fz * fz)
+    fx = fx / fl
+    fy = fy / fl
+    fz = fz / fl
+    // s = normalize(f x up)
+    let sx = fy * uz - fz * uy
+    let sy = fz * ux - fx * uz
+    let sz = fx * uy - fy * ux
+    let sl = sqrt(sx * sx + sy * sy + sz * sz)
+    sx = sx / sl
+    sy = sy / sl
+    sz = sz / sl
+    // u = s x f
+    let vx = sy * fz - sz * fy
+    let vy = sz * fx - sx * fz
+    let vz = sx * fy - sy * fx
+    let m = glmIdentity()
+    m[0] = sx
+    m[4] = sy
+    m[8] = sz
+    m[1] = vx
+    m[5] = vy
+    m[9] = vz
+    m[2] = -fx
+    m[6] = -fy
+    m[10] = -fz
+    m[12] = -(sx * ex + sy * ey + sz * ez)
+    m[13] = -(vx * ex + vy * ey + vz * ez)
+    m[14] = fx * ex + fy * ey + fz * ez
+    return m
+}
+
+fn glmZero() -> []float {
+    let m: []float = []
+    for i in 0..16 {
+        push(m, 0.0)
+    }
+    return m
+}
