@@ -35,11 +35,14 @@
 // with nothing installed.
 //
 // Every Vulkan function used is declared pub below and called directly
-// from vulkan-1.dll, which ships with every current GPU driver. The VK
-// struct holds the raw handles, so anything this package does not wrap
-// can be done with the same calls a C program makes.
+// from vulkan-1.dll (libvulkan.so.1 on Linux), which ships with every
+// current GPU driver. The VK struct holds the raw handles, so anything
+// this package does not wrap can be done with the same calls a C
+// program makes.
 //
-// Needs Veyl 0.66.0 or newer, for win.handle. Windows only for now.
+// Windows and Linux (X11). Needs Veyl 0.67.0 or newer, for win.display
+// and mem.call off Windows; a Linux build takes every function here
+// from libvulkan.so.1. Not macOS yet, which needs MoltenVK.
 //
 // Textures, uniform buffers and push constants are there, and a
 // resizable window (win.resizable) rebuilds the swapchain by itself.
@@ -66,6 +69,14 @@ pub extern struct VkInstanceCreateInfo {
     ppEnabledLayerNames: ptr
     enabledExtensionCount: u32
     ppEnabledExtensionNames: ptr
+}
+
+pub extern struct VkXlibSurfaceCreateInfoKHR {
+    sType: u32
+    pNext: ptr
+    flags: u32
+    dpy: ptr
+    window: u64
 }
 
 pub extern struct VkWin32SurfaceCreateInfoKHR {
@@ -741,7 +752,7 @@ pub extern fn vkUpdateDescriptorSets(dev: ptr, writeCount: int, writes: ptr, cop
 pub extern fn vkCmdBindDescriptorSets(cmd: ptr, point: int, layout: ptr, firstSet: int, count: int,
     sets: ptr, dynamicCount: int, dynamicOffsets: ptr) from "vulkan-1"
 
-extern fn GetModuleHandleA(name: ptr) -> ptr from "kernel32"
+pub extern fn vkGetInstanceProcAddr(inst: ptr, name: str) -> ptr from "vulkan-1"
 
 // ---- the values used here, from vulkan_core.h ----
 
@@ -801,6 +812,7 @@ const ST_WRITE_DESCRIPTOR_SET = 35
 const ST_SWAPCHAIN_CREATE_INFO = 1000001000
 const ST_PRESENT_INFO = 1000001001
 const ST_WIN32_SURFACE_CREATE_INFO = 1000009000
+const ST_XLIB_SURFACE_CREATE_INFO = 1000004000
 
 // ---- the state ----
 
@@ -917,12 +929,14 @@ fn vkAllocateFor(v: VK, req: VkMemoryRequirements, want: int) -> int! {
 // Everything up to the first frame. Fails with the step that failed
 // rather than handing back a VK the first draw would crash on.
 pub fn vkOpen(w: int) -> VK! {
-    if os.name() != "windows" {
-        return fail("vulkan: only Windows is supported so far")
+    let windows = os.name() == "windows"
+    if !windows && os.name() != "linux" {
+        return fail("vulkan: {os.name()} is not supported yet - Windows and Linux are")
     }
     let v = VK(mem.alloc(VK.size))
 
-    // Instance, with the two extensions a window needs.
+    // Instance, with the two extensions a window needs: the surface, and
+    // the one that makes it from this system's kind of window.
     let appName = "veyl"
     let app = VkApplicationInfo{}
     app.sType = u32(ST_APPLICATION_INFO)
@@ -930,10 +944,13 @@ pub fn vkOpen(w: int) -> VK! {
     app.pEngineName = mem.addr(appName)
     app.apiVersion = u32(VK_API_VERSION_1_0)
     let extSurface = "VK_KHR_surface"
-    let extWin32 = "VK_KHR_win32_surface"
+    let extWindow = "VK_KHR_win32_surface"
+    if !windows {
+        extWindow = "VK_KHR_xlib_surface"
+    }
     let exts = mem.alloc(16)
     mem.write64(exts, mem.addr(extSurface))
-    mem.write64(exts + 8, mem.addr(extWin32))
+    mem.write64(exts + 8, mem.addr(extWindow))
     let ii = VkInstanceCreateInfo{}
     ii.sType = u32(ST_INSTANCE_CREATE_INFO)
     ii.pApplicationInfo = mem.addr(app)
@@ -948,17 +965,33 @@ pub fn vkOpen(w: int) -> VK! {
     }
     v.instance = inst
 
-    // The surface on the win window.
-    let si = VkWin32SurfaceCreateInfoKHR{}
-    si.sType = u32(ST_WIN32_SURFACE_CREATE_INFO)
-    si.hinstance = GetModuleHandleA(0)
-    si.hwnd = win.handle(w)
+    // The surface on the win window: an HWND and the HINSTANCE it was
+    // made with, or an X11 Window and its Display.
     let surface = 0
-    let rs = vkCreateWin32SurfaceKHR(v.instance, si, 0, &surface)
+    let rs = -7
+    if windows {
+        let si = VkWin32SurfaceCreateInfoKHR{}
+        si.sType = u32(ST_WIN32_SURFACE_CREATE_INFO)
+        si.hinstance = win.display(w)
+        si.hwnd = win.handle(w)
+        rs = vkCreateWin32SurfaceKHR(v.instance, si, 0, &surface)
+    } else {
+        // Looked up rather than declared, so a Windows build does not
+        // import a function its vulkan-1.dll may not have.
+        let make = vkGetInstanceProcAddr(v.instance, "vkCreateXlibSurfaceKHR")
+        if make != 0 {
+            let xi = VkXlibSurfaceCreateInfoKHR{}
+            xi.sType = u32(ST_XLIB_SURFACE_CREATE_INFO)
+            xi.dpy = win.display(w)
+            xi.window = u64(win.handle(w))
+            rs = mem.call(make, v.instance, xi, 0, &surface) & 0xFFFFFFFF
+            if rs >= 0x80000000 { rs = rs - 0x100000000 }
+        }
+    }
     if rs < 0 {
         vkDestroyInstance(v.instance, 0)
         mem.free(mem.addr(v))
-        return fail("vulkan: vkCreateWin32SurfaceKHR failed: {vkResultText(rs)}")
+        return fail("vulkan: creating the window surface failed: {vkResultText(rs)}")
     }
     v.surface = surface
 

@@ -13,7 +13,7 @@ it.
 | Package | What it is |
 | --- | --- |
 | [`dotenv`](dotenv/) | `.env` files, with quoting and typed reads |
-| [`gl`](gl/) | OpenGL on a `win` window: context, shaders, buffers, textures, matrices |
+| [`gl`](gl/) | OpenGL on a `win` window, Windows and Linux: context, shaders, buffers, textures, matrices |
 | [`ini`](ini/) | Config files: `[sections]`, `key = value`, comments |
 | [`jwt`](jwt/) | JSON Web Tokens, HS256, signing and verifying |
 | [`querybuilder`](querybuilder/) | Building SQL without pasting values into it |
@@ -21,7 +21,7 @@ it.
 | [`toml`](toml/) | TOML config, flattened to dotted keys, typed reads |
 | [`totp`](totp/) | TOTP and HOTP, the six-digit codes an authenticator app shows |
 | [`validator`](validator/) | Checking data, collecting every problem |
-| [`vulkan`](vulkan/) | Vulkan on a `win` window: swapchain, depth, pipelines from SPIR-V, push constants |
+| [`vulkan`](vulkan/) | Vulkan on a `win` window, Windows and Linux: swapchain, depth, SPIR-V pipelines, textures, uniforms |
 
 ---
 
