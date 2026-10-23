@@ -1,6 +1,6 @@
 # Scandiacus packages
 
-The official library registry for [Scandiacus](https://github.com/owlspan/Scandiacus.
+The official library registry for [Scandiacus](https://github.com/owlspan/Scandiacus).
 
 ```
 Scandiacus get totp
