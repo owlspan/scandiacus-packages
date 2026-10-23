@@ -7,7 +7,7 @@ Scandiacus get totp
 ```
 
 That reads from this repository, drops the package into
-`./veyl_modules/totp/` next to your program, and `import "totp"` finds
+`./scandiacus_modules/totp/` next to your program, and `import "totp"` finds
 it.
 
 | Package | What it is |
@@ -42,7 +42,7 @@ package next to the executable it writes.
 ```
 scandiacus get totp                          from this registry
 scandiacus get github.com/someone/their-lib  from anyone's repository
-scandiacus get https://example.com/thing.vl  from a single file
+scandiacus get https://example.com/thing.scd  from a single file
 scandiacus list                              what is installed here
 scandiacus remove totp                       uninstall it
 ```
@@ -58,7 +58,7 @@ scandiacus get officials --nodlls   the same, minus the ones carrying a
 `--nodlls` matters for size. Everything here is a few kilobytes except
 `sqlite`, which is three megabytes because it carries the real library.
 
-The same works for anyone's registry. It only needs a `veyl.index`
+The same works for anyone's registry. It only needs a `scandiacus.index`
 listing its packages, one name per line:
 
 ```
@@ -121,7 +121,7 @@ that one to `import`.
 Name the `.dll` in the manifest alongside the source:
 
 ```
-sqlite.vl
+sqlite.scd
 sqlite3.dll
 ```
 

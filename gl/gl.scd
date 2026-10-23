@@ -1,6 +1,6 @@
 // gl - OpenGL on a win window.
 //
-//     veyl get gl
+//     scandiacus get gl
 //
 //     import "gl"
 //
@@ -27,7 +27,7 @@
 // and framebuffers are all there, and so are the old fixed-function
 // calls. glVersion() says what was given.
 //
-// Windows and Linux (X11). Needs Veyl 0.67.0 or newer, for win.display
+// Windows and Linux (X11). Needs Scandiacus 0.67.0 or newer, for win.display
 // and mem.call off Windows. Not macOS: Apple stopped OpenGL at 4.1 and
 // deprecated it.
 //

@@ -9,7 +9,7 @@
 //
 // Keys are flattened to dotted paths, so `[server]` with `port = 8080`
 // under it is read as `server.port`. That keeps the whole file one map
-// rather than needing a value type Veyl has no way to express without
+// rather than needing a value type Scandiacus has no way to express without
 // unions.
 //
 // Values are stored as their raw TOML text and converted on the way
@@ -268,7 +268,7 @@ pub fn tomlFloat(cfg: {str: str}, key: str, fallback: float) -> float! {
     let raw = replace(cfg[key], "_", "")
     if raw == "inf" || raw == "+inf" { return fallback }
     if raw == "nan" { return fallback }
-    // float() accepts what Veyl's own literals accept, which covers
+    // float() accepts what Scandiacus's own literals accept, which covers
     // TOML's exponents and signs.
     if !tomlLooksNumeric(raw) {
         return fail("{key} = \"{cfg[key]}\" is not a number")

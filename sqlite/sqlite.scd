@@ -1,6 +1,6 @@
 // sqlite - the native library, plus a few helpers over the db builtins.
 //
-//     veyl get sqlite
+//     scandiacus get sqlite
 //
 //     import "sqlite"
 //
@@ -14,7 +14,7 @@
 //     db.close(conn)
 //
 // The db.* functions are built into the compiler. What this package
-// carries is sqlite3.dll, which `veyl build` copies next to your
+// carries is sqlite3.dll, which `scandiacus build` copies next to your
 // executable. That is why SQLite is a package rather than part of the
 // installer: a program that never opens a database never carries a
 // three megabyte library.
@@ -94,7 +94,7 @@ pub fn dbSafeName(name: str) -> bool {
 // ---- schema ----
 
 pub fn dbTables(conn: int) -> []str! {
-    // One line: a newline ends a statement in Veyl, so an expression
+    // One line: a newline ends a statement in Scandiacus, so an expression
     // cannot be split across lines in either direction.
     const SQL = "select name from sqlite_master where type = 'table' and name not like 'sqlite_%' order by name"
     let rows = db.query(conn, SQL, dbNoArgs)?

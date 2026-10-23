@@ -1,7 +1,7 @@
 // A textured, lit crate in Vulkan, in a window you can resize.
 //
-//     veyl get vulkan
-//     veyl run crate.vl
+//     scandiacus get vulkan
+//     scandiacus run crate.scd
 //
 // The texture is drawn with the win library on a canvas and uploaded,
 // the camera matrix goes in a uniform buffer and the crate's own matrix
@@ -10,7 +10,7 @@
 // the window's edge to see the swapchain follow. --frames N stops after
 // N frames and prints the middle pixel.
 //
-// The shaders are SPIR-V as hex, as in cube.vl. They are this GLSL:
+// The shaders are SPIR-V as hex, as in cube.scd. They are this GLSL:
 //
 //     // vertex
 //     layout(set = 0, binding = 0) uniform U { mat4 viewProj; } u;
@@ -148,7 +148,7 @@ fn crateTexture(v: VK) -> VKTexture! {
     }
     win.frame(c, 0, 0, 128, 128, win.rgb(40, 24, 12))
     win.frame(c, 1, 1, 126, 126, win.rgb(40, 24, 12))
-    win.text(c, 48, 58, "VEYL", win.rgb(250, 235, 200))
+    win.text(c, 48, 58, "SCANDIACUS", win.rgb(250, 235, 200))
     let t = vkTexture(v, win.pixels(c) as int, 128, 128)
     win.close(c)
     return t

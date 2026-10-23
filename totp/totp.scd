@@ -135,7 +135,7 @@ pub fn totpHotp(secret: str, counter: int, digits: int) -> str! {
     // to read four bytes from, so the code depends on all twenty.
     let offset = mac[len(mac) - 1] & 15
     // Built up a statement at a time: a newline ends a statement in
-    // Veyl, so an expression cannot be continued by starting the next
+    // Scandiacus, so an expression cannot be continued by starting the next
     // line with an operator.
     let binary = (mac[offset] & 127) << 24
     binary = binary | ((mac[offset + 1] & 255) << 16)

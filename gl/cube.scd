@@ -1,7 +1,7 @@
 // A lit, spinning cube - the gl package end to end.
 //
-//     veyl get gl
-//     veyl run cube.vl
+//     scandiacus get gl
+//     scandiacus run cube.scd
 //
 // Drag with the mouse to turn it, Esc to quit. --frames 60 stops after
 // that many frames and prints the pixel at the middle, which is how it

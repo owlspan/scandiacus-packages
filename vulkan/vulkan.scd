@@ -1,6 +1,6 @@
 // vulkan - Vulkan on a win window.
 //
-//     veyl get vulkan
+//     scandiacus get vulkan
 //
 //     import "vulkan"
 //
@@ -31,7 +31,7 @@
 // since the driver compiles SPIR-V to the GPU's own code either way.
 // Write GLSL and compile it with glslc from the Vulkan SDK, or with any
 // other tool that writes SPIR-V, then load the .spv with bytes.read.
-// cube.vl beside this file carries its two shaders inline, so it runs
+// cube.scd beside this file carries its two shaders inline, so it runs
 // with nothing installed.
 //
 // Every Vulkan function used is declared pub below and called directly
@@ -40,7 +40,7 @@
 // this package does not wrap can be done with the same calls a C
 // program makes.
 //
-// Windows and Linux (X11). Needs Veyl 0.67.0 or newer, for win.display
+// Windows and Linux (X11). Needs Scandiacus 0.67.0 or newer, for win.display
 // and mem.call off Windows; a Linux build takes every function here
 // from libvulkan.so.1. Not macOS yet, which needs MoltenVK.
 //
@@ -941,7 +941,7 @@ pub fn vkOpen(w: int) -> VK! {
 
     // Instance, with the two extensions a window needs: the surface, and
     // the one that makes it from this system's kind of window.
-    let appName = "veyl"
+    let appName = "scandiacus"
     let app = VkApplicationInfo{}
     app.sType = u32(ST_APPLICATION_INFO)
     app.pApplicationName = mem.addr(appName)
@@ -1457,7 +1457,7 @@ pub fn vkShaderModule(v: VK, spirv: bytes) -> int! {
     return m
 }
 
-// SPIR-V written as hex, the way cube.vl carries its shaders; spaces
+// SPIR-V written as hex, the way cube.scd carries its shaders; spaces
 // and line breaks are ignored.
 pub fn vkSpirvHex(text: str) -> bytes! {
     let s = replace(replace(replace(text, "\n", ""), "\r", ""), " ", "")

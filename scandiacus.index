@@ -1,8 +1,8 @@
 # Every package in this registry, one name per line.
 #
-# `veyl get officials` installs all of them. `--nodlls` leaves out the
+# `scandiacus get officials` installs all of them. `--nodlls` leaves out the
 # ones carrying a native library, which are the large ones; whether a
-# package is native is read from its own veyl.pkg rather than marked
+# package is native is read from its own scandiacus.pkg rather than marked
 # here, so this list cannot drift out of step with reality.
 dotenv
 gl

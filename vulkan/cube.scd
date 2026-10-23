@@ -1,7 +1,7 @@
 // A spinning cube in Vulkan - the vulkan package end to end.
 //
-//     veyl get vulkan
-//     veyl run cube.vl
+//     scandiacus get vulkan
+//     scandiacus run cube.scd
 //
 // Drag with the mouse to turn it, Esc to quit. --frames 60 stops after
 // that many frames and prints the pixel at the middle, which is how it
