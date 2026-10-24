@@ -228,3 +228,9 @@ What is looked for:
 Being in this registry only means `scandiacus get <name>` works without the
 `github.com/you/` prefix. Everything else about a package is the same
 either way, and you are not required to be here to publish.
+
+## License
+
+The packages in this repository are MIT, see `LICENSE`. A package added
+later says its own license at the top of its files; without one, it is MIT
+too.
